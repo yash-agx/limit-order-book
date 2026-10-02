@@ -1,5 +1,7 @@
 # Limit Order Book & Matching Engine
 
+**[Read the full report (PDF)](report.pdf)**
+
 A limit-order matching engine in C++17, implemented four times with different data structures
 behind one interface, and benchmarked to answer one question:
 
