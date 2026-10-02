@@ -63,3 +63,12 @@ private:
     template <typename Book>
     static void eraseFrom(Book& book, Price price, Level::iterator it);
 };
+
+// Ablation step C1: exactly engine A, except every map, list and hash-map node comes from
+// a memory pool (std::pmr::unsynchronized_pool_resource). The pool takes big blocks from
+// the system and cuts them into same-sized pieces, so getting or returning a node is a
+// few instructions instead of a trip through the general-purpose allocator.
+class PoolBook : public OrderBook {
+public:
+    PoolBook() : OrderBook(true) {}
+};
