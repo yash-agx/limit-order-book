@@ -1,7 +1,7 @@
 #include "OrderFlow.hpp"
 #include <algorithm>
 
-void apply(OrderBook& book, const Action& action) {
+void apply(OrderBookBase& book, const Action& action) {
     switch (action.type) {
         case ActionType::Add:    book.addOrder(action.order); break;
         case ActionType::Cancel: book.cancelOrder(action.order.id); break;

@@ -1,17 +1,8 @@
 #include "OrderBook.hpp"
 #include <algorithm>
-#include <chrono>
-#include <cstdio>
 #include <iterator>
 
 namespace {
-
-// Can this incoming order trade against a resting order at levelPrice?
-bool crosses(const Order& o, Price levelPrice) {
-    if (o.type == OrderType::Market) return true;            // market orders take any price
-    return o.side == Side::Buy ? levelPrice <= o.price         // buyer: ask must be at or below my limit
-                               : levelPrice >= o.price;        // seller: bid must be at or above my limit
-}
 
 // Walk one side of the book from the best price and summarise the first `levels` levels.
 // A template so the same code works for bids_ and asks_ (they are different map types).
@@ -27,45 +18,45 @@ std::vector<DepthLevel> topLevels(const Book& book, std::size_t levels) {
     return out;
 }
 
-// Current time in nanoseconds. steady_clock only ever moves forward (unlike the wall clock,
-// which can be adjusted), so it is the right clock for ordering events and measuring latency.
-Timestamp nowNs() {
-    auto sinceEpoch = std::chrono::steady_clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(sinceEpoch).count();
-}
+// A memory resource that is nothing more than plain new/delete, exactly what std::map,
+// std::list and std::unordered_map do by default.
+// (The standard library's own std::pmr::new_delete_resource() isn't used because it goes
+// through the "aligned" version of new, which on this compiler costs about 16 extra bytes
+// per allocation - that would make the baseline look worse than ordinary containers.)
+class PlainNewDelete : public std::pmr::memory_resource {
+    void* do_allocate(std::size_t bytes, std::size_t) override { return ::operator new(bytes); }
+    void  do_deallocate(void* p, std::size_t, std::size_t) override { ::operator delete(p); }
+    bool  do_is_equal(const std::pmr::memory_resource& other) const noexcept override { return this == &other; }
+};
 
-void printPrice(Price p) { std::printf("$%lld.%02lld", (long long)(p / 100), (long long)(p % 100)); }
+std::pmr::memory_resource* plainNewDelete() {
+    static PlainNewDelete resource;
+    return &resource;
+}
 
 }  // namespace
 
-RejectReason OrderBook::validate(const Order& order) const {
-    if (order.quantity == 0)        return RejectReason::ZeroQuantity;
-    if (index_.count(order.id) > 0) return RejectReason::DuplicateId;   // id is already resting
-    return RejectReason::None;
+OrderBook::OrderBook(bool usePool)
+    : pool_(usePool ? std::make_unique<std::pmr::unsynchronized_pool_resource>() : nullptr),
+      bids_(memory()), asks_(memory()), index_(memory()) {}
+
+std::pmr::memory_resource* OrderBook::memory() const {
+    if (pool_) return pool_.get();
+    return plainNewDelete();
 }
 
-std::vector<Trade> OrderBook::addOrder(Order order) {
-    std::vector<Trade> fills;
-    if (validate(order) != RejectReason::None) return fills;   // rejected before it can touch the book
+void OrderBook::match(Order& incoming, std::vector<Trade>& out) {
+    if (incoming.side == Side::Buy) matchAgainst(incoming, asks_, out);
+    else                            matchAgainst(incoming, bids_, out);
+}
 
-    order.timestamp = nowNs();   // the book stamps arrival time itself; whatever the caller put there is overwritten
-
-    if (order.side == Side::Buy) match(order, asks_, fills);
-    else                         match(order, bids_, fills);
-
-    // Leftover limit quantity waits in the book. Leftover market quantity is dropped
-    // (nothing left to trade against).
-    if (order.quantity > 0 && order.type == OrderType::Limit) {
-        if (order.side == Side::Buy) rest(order, bids_);
-        else                         rest(order, asks_);
-    }
-
-    trades_.insert(trades_.end(), fills.begin(), fills.end());
-    return fills;
+void OrderBook::rest(const Order& order) {
+    if (order.side == Side::Buy) restIn(order, bids_);
+    else                         restIn(order, asks_);
 }
 
 template <typename Book>
-void OrderBook::match(Order& incoming, Book& opposite, std::vector<Trade>& out) {
+void OrderBook::matchAgainst(Order& incoming, Book& opposite, std::vector<Trade>& out) {
     while (incoming.quantity > 0 && !opposite.empty()) {
         auto best = opposite.begin();                  // best price level on the other side
         if (!crosses(incoming, best->first)) break;    // prices don't overlap -> stop
@@ -75,10 +66,7 @@ void OrderBook::match(Order& incoming, Book& opposite, std::vector<Trade>& out) 
             Order& resting = level.front();            // oldest order at this price goes first
             Quantity qty = std::min(incoming.quantity, resting.quantity);
 
-            bool buyerIsIncoming = incoming.side == Side::Buy;
-            out.push_back({buyerIsIncoming ? incoming.id : resting.id,
-                           buyerIsIncoming ? resting.id  : incoming.id,
-                           best->first, qty, incoming.timestamp});
+            out.push_back(makeTrade(incoming, resting.id, best->first, qty));
 
             incoming.quantity -= qty;
             resting.quantity  -= qty;                  // partial fill if this stays > 0
@@ -93,7 +81,7 @@ void OrderBook::match(Order& incoming, Book& opposite, std::vector<Trade>& out) 
 }
 
 template <typename Book>
-void OrderBook::rest(const Order& order, Book& own) {
+void OrderBook::restIn(const Order& order, Book& own) {
     Level& level = own[order.price];                   // creates the level if it doesn't exist
     level.push_back(order);                            // join the back of the queue
     index_[order.id] = {order.side, order.price, std::prev(level.end())};
@@ -108,19 +96,6 @@ bool OrderBook::cancelOrder(OrderId id) {
     else                       eraseFrom(asks_, loc.price, loc.it);
 
     index_.erase(found);
-    return true;
-}
-
-bool OrderBook::modifyOrder(OrderId id, Price newPrice, Quantity newQuantity) {
-    auto found = index_.find(id);
-    if (found == index_.end() || newQuantity == 0) return false;   // check first, so a failed modify changes nothing
-
-    Order replacement = *found->second.it;             // copy it now: cancelOrder destroys the original
-    replacement.price    = newPrice;
-    replacement.quantity = newQuantity;
-
-    cancelOrder(id);
-    addOrder(replacement);                             // new timestamp, back of the queue
     return true;
 }
 
@@ -141,11 +116,6 @@ std::optional<Price> OrderBook::bestAsk() const {
     return asks_.begin()->first;                       // lowest ask
 }
 
-std::optional<Price> OrderBook::spread() const {
-    if (bids_.empty() || asks_.empty()) return std::nullopt;
-    return *bestAsk() - *bestBid();
-}
-
 std::vector<DepthLevel> OrderBook::depth(Side side, std::size_t levels) const {
     return side == Side::Buy ? topLevels(bids_, levels) : topLevels(asks_, levels);
 }
@@ -154,30 +124,4 @@ std::optional<Order> OrderBook::getOrder(OrderId id) const {
     auto found = index_.find(id);
     if (found == index_.end()) return std::nullopt;
     return *found->second.it;                          // follow the stored iterator to the order
-}
-
-Quantity OrderBook::quantityAt(Side side, Price price) const {
-    auto total = [](const Level& lvl) {
-        Quantity q = 0;
-        for (const Order& o : lvl) q += o.quantity;
-        return q;
-    };
-    if (side == Side::Buy) { auto it = bids_.find(price); return it == bids_.end() ? 0 : total(it->second); }
-    auto it = asks_.find(price);
-    return it == asks_.end() ? 0 : total(it->second);
-}
-
-void OrderBook::print() const {
-    std::printf("      PRICE      QTY\n");
-    for (auto it = asks_.rbegin(); it != asks_.rend(); ++it) {   // asks: highest at top
-        std::printf("ASK  ");
-        printPrice(it->first);
-        std::printf("  %5u\n", quantityAt(Side::Sell, it->first));
-    }
-    std::printf("---------------------\n");
-    for (const auto& [price, level] : bids_) {
-        std::printf("BID  ");
-        printPrice(price);
-        std::printf("  %5u\n", quantityAt(Side::Buy, price));
-    }
 }

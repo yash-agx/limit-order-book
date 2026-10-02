@@ -16,8 +16,8 @@ struct Action {
                         // Modify: order.id, plus the new price and new quantity.
 };
 
-// Run one action against a book.
-void apply(OrderBook& book, const Action& action);
+// Run one action against a book (any engine).
+void apply(OrderBookBase& book, const Action& action);
 
 struct FlowConfig {
     std::uint64_t seed           = 42;
@@ -57,7 +57,7 @@ private:
     Price           mid_;
     OrderId         nextId_ = 1;
 
-    OrderBook book_;               // private copy of the book, used only to know what is resting
+    OrderBook book_;               // private book (engine A), used only to know what is resting
     std::vector<OrderId>                     live_;   // ids of resting orders, so one can be picked at random
     std::unordered_map<OrderId, std::size_t> pos_;    // id -> its position in live_
 
