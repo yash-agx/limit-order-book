@@ -163,3 +163,4 @@ Same interface, three implementations, benchmarked on identical order flow:
 - Keep code readable over clever until Phase 4.
 - I'm on Windows: build with CMake (commands above), not `make`.
 - Git: the repo root is the parent `quant-projects/` folder. Commit after each finished feature.
+- Do not add Co-Authored-By or Claude-Session lines to commit messages.
