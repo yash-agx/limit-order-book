@@ -51,8 +51,11 @@ std::vector<Action> OrderFlowGenerator::prefill() {
 }
 
 Action OrderFlowGenerator::next() {
-    // The mid price drifts: about 2 actions in 100 move it up or down by one cent.
-    if (uniform(1, 100) <= 2) mid_ += (uniform(0, 1) == 0 ? -1 : 1);
+    // The mid price follows the book: halfway between the best bid and the best ask.
+    // So prices move the way they do in a real market - because orders traded - and a
+    // deep book moves less than a thin one. (If one side is empty, keep the last mid.)
+    std::optional<Price> bid = book_.bestBid(), ask = book_.bestAsk();
+    if (bid && ask) mid_ = (*bid + *ask) / 2;
     mid_ = std::max(mid_, config_.maxOffset + 1);      // keep every price above zero
 
     int roll        = static_cast<int>(uniform(1, 100));
