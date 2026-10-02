@@ -21,7 +21,7 @@ void apply(OrderBook& book, const Action& action);
 
 struct FlowConfig {
     std::uint64_t seed           = 42;
-    Price         midPrice       = 10000;  // $100.00: prices are generated around this
+    Price         midPrice       = 10000;  // $100.00: the starting mid; afterwards the mid follows the book
     Price         maxOffset      = 200;    // passive orders sit 1..maxOffset cents away from the mid
     Quantity      maxQuantity    = 100;    // order sizes are 1..maxQuantity
     std::size_t   targetBookSize = 1000;   // the generator keeps about this many orders resting
