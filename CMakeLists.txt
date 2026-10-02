@@ -12,7 +12,7 @@ else()
 endif()
 
 # The engine, compiled once and shared by both programs
-add_library(orderbook STATIC OrderBook.cpp)
+add_library(orderbook STATIC OrderBook.cpp OrderFlow.cpp)
 
 add_executable(demo main.cpp)
 target_link_libraries(demo PRIVATE orderbook)

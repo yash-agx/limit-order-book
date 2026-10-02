@@ -1,4 +1,5 @@
 #include "OrderBook.hpp"
+#include "OrderFlow.hpp"
 #include <cassert>
 #include <cstdio>
 
@@ -331,5 +332,84 @@ int main() {
         assert(b.getOrder(1)->timestamp == before);
     }
 
-    std::printf("All 31 tests passed.\n");
+    // ---- Phase 3: order-flow generator ----
+
+    auto sameAction = [](const Action& x, const Action& y) {
+        return x.type == y.type && x.order.id == y.order.id && x.order.side == y.order.side &&
+               x.order.type == y.order.type && x.order.price == y.order.price &&
+               x.order.quantity == y.order.quantity;
+    };
+
+    // 32. Same seed -> exactly the same order flow; a different seed -> a different one
+    {
+        FlowConfig cfg;
+        cfg.targetBookSize = 200;
+        OrderFlowGenerator g1(cfg), g2(cfg);
+        auto p1 = g1.prefill(), p2 = g2.prefill();
+        auto f1 = g1.generate(5000), f2 = g2.generate(5000);
+        assert(p1.size() == p2.size() && f1.size() == 5000 && f2.size() == 5000);
+        for (std::size_t i = 0; i < p1.size(); ++i) assert(sameAction(p1[i], p2[i]));
+        for (std::size_t i = 0; i < f1.size(); ++i) assert(sameAction(f1[i], f2[i]));
+
+        cfg.seed = 7;
+        OrderFlowGenerator g3(cfg);
+        g3.prefill();
+        auto f3 = g3.generate(5000);
+        std::size_t different = 0;
+        for (std::size_t i = 0; i < f1.size(); ++i) different += !sameAction(f1[i], f3[i]);
+        assert(different > 0);
+    }
+    // 33. Prefill puts exactly targetBookSize orders in the book and causes no trades
+    {
+        FlowConfig cfg;
+        cfg.targetBookSize = 500;
+        OrderFlowGenerator gen(cfg);
+        auto prefill = gen.prefill();
+        assert(prefill.size() == 500 && gen.bookSize() == 500);
+
+        OrderBook b;
+        for (const Action& a : prefill) {
+            assert(a.type == ActionType::Add && a.order.type == OrderType::Limit);
+            apply(b, a);
+        }
+        assert(b.tradeHistory().empty());
+        assert(b.bestBid() < cfg.midPrice && b.bestAsk() > cfg.midPrice);
+    }
+    // 34. The flow is valid: every order is well-formed, every cancel/modify targets a resting
+    //     order, the mix contains every kind of action, and the book stays near its target size
+    {
+        FlowConfig cfg;
+        cfg.targetBookSize = 1000;
+        OrderFlowGenerator gen(cfg);
+        auto prefill = gen.prefill();
+        auto flow    = gen.generate(20000);
+
+        OrderBook b;
+        for (const Action& a : prefill) apply(b, a);
+
+        std::size_t limits = 0, markets = 0, cancels = 0, modifies = 0;
+        for (const Action& a : flow) {
+            if (a.type == ActionType::Add) {
+                assert(b.validate(a.order) == RejectReason::None);
+                if (a.order.type == OrderType::Limit) { assert(a.order.price > 0); ++limits; }
+                else                                  ++markets;
+            } else {
+                assert(b.hasOrder(a.order.id));
+                if (a.type == ActionType::Cancel) ++cancels; else ++modifies;
+            }
+            apply(b, a);
+        }
+        assert(limits > 0 && markets > 0 && cancels > 0 && modifies > 0);
+        assert(!b.tradeHistory().empty());
+        assert(*b.bestBid() < *b.bestAsk());                       // the book is never crossed
+
+        // The generator's idea of the book matches a real replay of its actions
+        std::size_t resting = 0;
+        for (const DepthLevel& lvl : b.depth(Side::Buy, 100000))  resting += lvl.orderCount;
+        for (const DepthLevel& lvl : b.depth(Side::Sell, 100000)) resting += lvl.orderCount;
+        assert(resting == gen.bookSize());
+        assert(resting > 900 && resting < 1100);
+    }
+
+    std::printf("All 34 tests passed.\n");
 }
