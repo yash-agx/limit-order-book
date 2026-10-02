@@ -566,6 +566,8 @@ int main() {
     std::printf("C2: all 39 tests passed.\n");
     engineTests<IntrusiveBookC3>();
     std::printf("C3: all 39 tests passed.\n");
+    engineTests<CustomBook>();
+    std::printf("C4: all 39 tests passed.\n");
 
     differentialTest(42, 200, 30000);
     differentialTest(7, 2000, 30000);
