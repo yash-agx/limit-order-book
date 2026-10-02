@@ -10,6 +10,7 @@
 //   B   flat array of price levels + vector queues + array index (FlatBook)
 //   C1  A + memory pool (PoolBook)
 //   C2  C1 + intrusive linked list, orders in one pre-allocated array (IntrusiveBook)
+//   C3  C2 + open-addressing hash map for the id index
 const std::vector<std::string>& engineNames();
 
 // Build an engine by name. Returns nullptr if the name is unknown.
