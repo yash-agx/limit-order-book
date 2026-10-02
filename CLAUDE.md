@@ -16,7 +16,7 @@ Research question for the final write-up:
 ## Current status
 **Phases 1–3 are DONE. Phase 4 code, experiment and results are DONE**; the only thing left is the
 write-up, which I (Yash) am writing myself — don't write it for me.
-39 tests per engine × 6 engines, plus a differential test, all passing.
+40 tests per engine × 7 engines, plus a differential test on both order flows, all passing.
 
 Files:
 - `Order.hpp` — `Order`, `Trade`, `Side`, `OrderType` types
@@ -24,14 +24,18 @@ Files:
   (validate, timestamps, trade history, `reserveTrades`, modify, print)
 - `OrderBook.hpp / .cpp` — engine **A** (`OrderBook`) and ablation step **C1** (`PoolBook` = A + memory pool)
 - `FlatBook.hpp / .cpp` — engine **B**
-- `IntrusiveBook.hpp` — engine **C** as a template: `IntrusiveBookC2`, `IntrusiveBookC3`, `CustomBook` (= C4 = C)
-- `Engines.hpp / .cpp` — `makeBook("A" | "B" | "C1" | "C2" | "C3" | "C4")`
-- `OrderFlow.hpp / OrderFlow.cpp` — seeded order-flow generator (`OrderFlowGenerator`, `Action`, `apply`)
+- `IntrusiveBook.hpp` — engines **C** and **D** as one template with three pluggable parts (index, pool, price levels):
+  `IntrusiveBookC2`, `IntrusiveBookC3`, `CustomBook` (= C4 = C), `HybridBook` (= D = C with B's flat price array)
+- `Engines.hpp / .cpp` — `makeBook("A" | "B" | "C1" | "C2" | "C3" | "C4" | "D")`
+- `OrderFlow.hpp / OrderFlow.cpp` — seeded order-flow generator (`OrderFlowGenerator`, `Action`, `apply`);
+  `standardFlow(n)` and `hardFlow(n)` (random 64-bit ids, up to 10,000 price levels, orders clustered within
+  20 cents of the mid with 5% far-away orders)
 - `main.cpp` — demo using the example book from the spec
 - `tests.cpp` — assert-based tests (a template run once per engine) + differential test
-- `bench.cpp` — benchmark (`bench.exe <engine> [bookSize] [actions] [run] [outDir]`), built with `-O3 -DNDEBUG`;
-  2 warm-ups + 1 measured run per process
-- `analysis/run_bench.py` — runs every engine × 1k/10k/100k/1M × 5 runs, interleaved, fresh process each; rewrites `results/*.csv`
+- `bench.cpp` — benchmark (`bench.exe <engine> [bookSize] [actions] [run] [outDir] [standard|hard]`), built with
+  `-O3 -DNDEBUG`; 2 warm-ups + 1 measured run per process
+- `analysis/run_bench.py` — standard flow: all 7 engines; hard flow: A, B, C4, D. Each × 1k/10k/100k/1M × 5 runs,
+  interleaved, fresh process each (220 runs, ~20 min); rewrites `results/*.csv`
 - `analysis/plot_results.py` — prints the comparison/ablation tables (with the noise rule), writes charts to `results/*.png`
 - `results/` — Phase 4 CSVs and charts (committed, so the write-up can cite them)
 - `results_phase3/` — the Phase 3 baseline, before the trade-history fix
@@ -45,25 +49,38 @@ Files:
   python analysis\plot_results.py
   ```
 
-Phase 4 results (i7-14650HX, 1M actions, median of 5 interleaved runs; million actions/sec, p50, p99.9, book memory):
+Phase 4 results (i7-14650HX, 1M actions, median of 5 interleaved runs; million actions/sec and p50).
+These are from the final 220-run session; an earlier 120-run session (A, B, C only) gave the same ranking.
 
-| Book | A | B | C |
-|---|---|---|---|
-| 1k | 8.14M, 113 ns, 754 ns, 0.15 MB | 19.97M, 41 ns, 402 ns, 0.27 MB | 13.90M, 65 ns, 379 ns, 0.24 MB |
-| 10k | 7.28M, 128 ns, 1.3 µs, 1.19 MB | 19.26M, 40 ns, 680 ns, 0.97 MB | 13.81M, 67 ns, 408 ns, 0.95 MB |
-| 100k | 4.72M, 199 ns, 2.7 µs, 12.2 MB | 15.02M, 42 ns, 3.3 µs, 8.9 MB | 11.28M, 84 ns, 494 ns, 8.5 MB |
-| 1M | 2.53M, 389 ns, 5.2 µs, 122 MB | 8.46M, 43 ns, 2.7 µs, 90 MB | 5.95M, 186 ns, 1.0 µs, 107 MB |
+| Flow | Book | A | B | C | D |
+|---|---|---|---|---|---|
+| standard | 1k | 8.21M, 115 ns | 19.73M, 41 ns | 13.41M, 67 ns | 24.96M, 36 ns |
+| standard | 10k | 6.88M, 132 ns | 17.56M, 41 ns | 12.93M, 70 ns | 22.90M, 43 ns |
+| standard | 100k | 4.42M, 204 ns | 13.66M, 45 ns | 10.90M, 87 ns | 17.37M, 58 ns |
+| standard | 1M | 2.35M, 403 ns | 8.29M, 45 ns | 5.50M, 195 ns | 6.51M, 135 ns |
+| hard | 1k | 8.53M, 110 ns | 11.03M, 81 ns | 16.46M, 55 ns | 24.60M, 41 ns |
+| hard | 10k | 7.21M, 134 ns | 9.00M, 95 ns | 13.07M, 66 ns | 20.02M, 45 ns |
+| hard | 100k | 4.06M, 222 ns | 6.11M, 138 ns | 10.20M, 89 ns | 15.14M, 63 ns |
+| hard | 1M | 1.66M, 567 ns | 2.26M, 411 ns | 5.36M, 193 ns | 6.17M, 146 ns |
 
 Phase 4 findings (full tables: run `python analysis\plot_results.py`):
-- B is fastest on throughput and typical latency at every size (2.5–3.4x A). C is 1.7–2.4x A.
-- C has the best median p99.9 from 10k up, but it only clears the run spread against B at 10k and 100k
-  (at 1k and 1M the runs overlap). B's p99.9 is no better than A's at 100k. Worst-case latency: no
-  engine differs from another beyond noise.
-- Ablation A → C: pool = within noise at every size; intrusive list +11–32%; open-addressing hash map
-  +47–81% (the biggest step); compact layout = within noise except +7% at 1M.
 - Noise rule: two results differ only if their min–max run ranges don't overlap.
+- Standard flow ranking by throughput: D > B > C > A at 10k and 100k (B ~ C within noise at 100k); D ~ B at 1k;
+  B > D > C > A at 1M.
+- Hard flow ranking: D > C > B > A at every size (C ~ B within noise at 10k). B falls from 2.4–3.5x A to
+  1.25–1.5x A; A, C and D barely change. So B's standard-flow lead depended on sequential ids and a narrow price band.
+- D vs C (flat price array instead of `std::map`, nothing else changed): +86% / +77% / +59% / +19% at
+  1k / 10k / 100k / 1M on the standard flow, +49% / +53% / +48% / +15% on the hard flow.
+- Ablation A → C → D (standard flow): pool is small and inconsistent (noise at 1k and 100k, -5% at 10k, +16% at 1M;
+  the earlier session had it within noise at all four sizes); intrusive list +21–39% (noise at 1k);
+  open-addressing hash map +53–79%; compact layout within noise at every size; flat levels as above.
+- p99.9: D is best or tied for best at every size on both flows. B's p99.9 is no better than A's at 100k
+  (standard) and worse than A's at 1k and 10k (hard).
+- B's memory grows while the book stays the same size: 0.27 → 15.7 MB at 1k and 90 → 124 MB at 1M over 1M
+  actions (standard flow); 1.3 → 9.2 MB and 121 → 144 MB (hard flow). A, C and D stay flat.
 - The trade-history fix cut A's worst case from ~1 ms to ~0.1–0.2 ms without changing throughput.
-- Not tried: C with B's flat price array instead of `std::map`.
+- Not tried: a cheaper index for D's new orders at 1M (the remaining gap to B on the standard flow), hardware
+  cache-miss counters, real exchange data.
 
 Phase 3 baseline (implementation A, i7-14650HX, 1M actions, median of 5 repeats):
 
@@ -122,7 +139,9 @@ Same interface, three implementations, benchmarked on identical order flow:
       with lazily removed dead slots, `std::deque` indexed by order id (hash-map fallback for huge ids)
 - [x] **C — Custom/low-level**: pre-allocated node pool, intrusive doubly-linked lists, open-addressing hash map,
       32-byte aligned nodes with the timestamp split out. Levels are still a `std::map`.
-- [x] Ablation A → C1 (pool) → C2 (intrusive list) → C3 (hash map) → C4 (layout)
+- [x] **D — C with B's flat price-level array** instead of the `std::map`
+- [x] Ablation A → C1 (pool) → C2 (intrusive list) → C3 (hash map) → C4 (layout) → D (flat levels)
+- [x] Robustness: A, B, C, D re-run on the hard flow (random ids, wide price band, clustered prices)
 - [x] Compare throughput, latency distribution, memory, with medians, spread and a noise rule
 - [ ] Write-up: method, results tables/charts, analysis, limitations — **Yash writes this, not Claude**
 
