@@ -1,5 +1,6 @@
 #include "Engines.hpp"
 #include "FlatBook.hpp"
+#include "IntrusiveBook.hpp"
 #include "OrderBook.hpp"
 #include "OrderFlow.hpp"
 #include <algorithm>
@@ -561,6 +562,8 @@ int main() {
     std::printf("B : all 39 tests passed.\n");
     engineTests<PoolBook>();
     std::printf("C1: all 39 tests passed.\n");
+    engineTests<IntrusiveBookC2>();
+    std::printf("C2: all 39 tests passed.\n");
 
     differentialTest(42, 200, 30000);
     differentialTest(7, 2000, 30000);
