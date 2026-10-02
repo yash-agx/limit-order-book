@@ -1,55 +1,50 @@
 #pragma once
-#include "Order.hpp"
+#include "OrderBookBase.hpp"
 #include <functional>
 #include <list>
 #include <map>
-#include <optional>
+#include <memory>
+#include <memory_resource>
 #include <unordered_map>
-#include <vector>
 
-class OrderBook {
+// Implementation A - the baseline, built from standard containers:
+//   std::map            price -> level, kept sorted so begin() is always the best price
+//   std::list           the queue of orders at one price, oldest first
+//   std::unordered_map  order id -> where that order is, for O(1) cancel
+//
+// The containers are the std::pmr versions. They are the same containers; the only
+// difference is that they ask a "memory resource" object for memory instead of calling
+// new/delete directly. That lets one class serve two experiments:
+//   usePool = false : plain new/delete for every node  (implementation A)
+//   usePool = true  : nodes come from a memory pool     (ablation step C1)
+// so the pool is the only thing that changes between the two.
+class OrderBook : public OrderBookBase {
 public:
-    // Submit an order. Returns the trades it caused (empty if nothing matched).
-    // A rejected order (see validate) is ignored: no trades, and the book is unchanged.
-    std::vector<Trade> addOrder(Order order);
+    explicit OrderBook(bool usePool = false);
 
-    // Would addOrder accept this order? Rejects zero quantity, and ids that are
-    // already resting in the book.
-    RejectReason validate(const Order& order) const;
+    bool                    cancelOrder(OrderId id) override;
+    bool                    hasOrder(OrderId id) const override { return index_.count(id) > 0; }
+    std::optional<Order>    getOrder(OrderId id) const override;
+    std::optional<Price>    bestBid() const override;
+    std::optional<Price>    bestAsk() const override;
+    std::vector<DepthLevel> depth(Side side, std::size_t levels) const override;
+    void                    reserveOrders(std::size_t expectedOrders) override { index_.reserve(expectedOrders); }
 
-    // Remove a resting order. Returns false if the id isn't in the book.
-    bool cancelOrder(OrderId id);
-
-    // Change a resting order's price and/or quantity. Done as cancel + re-add, so the order
-    // goes to the back of the queue (loses time priority) and may trade if the new price crosses;
-    // those trades appear in tradeHistory(). Returns false, changing nothing, if the id isn't
-    // in the book or newQuantity is 0.
-    bool modifyOrder(OrderId id, Price newPrice, Quantity newQuantity);
-
-    // Top of book. Empty optional if that side has no orders.
-    std::optional<Price> bestBid() const;
-    std::optional<Price> bestAsk() const;
-    std::optional<Price> spread() const;   // bestAsk - bestBid; empty unless both sides have orders
-
-    // Market depth: the best `levels` price levels on one side, best price first.
-    std::vector<DepthLevel> depth(Side side, std::size_t levels) const;
-
-    void print() const;
-    // Every trade since the book was created, oldest first.
-    const std::vector<Trade>& tradeHistory() const { return trades_; }
-
-    // Small helpers, mostly for tests
-    bool     hasOrder(OrderId id) const { return index_.count(id) > 0; }
-    std::optional<Order> getOrder(OrderId id) const;   // a copy of a resting order, if it exists
-    Quantity quantityAt(Side side, Price price) const;
+protected:
+    void match(Order& incoming, std::vector<Trade>& out) override;
+    void rest(const Order& order) override;
 
 private:
+    // Declared first so it is created before the containers and destroyed after them.
+    std::unique_ptr<std::pmr::unsynchronized_pool_resource> pool_;
+    std::pmr::memory_resource* memory() const;
+
     // All orders at one price, oldest first (time priority).
     // std::list because erasing from the middle (a cancel) is O(1) and doesn't break other iterators.
-    using Level = std::list<Order>;
+    using Level = std::pmr::list<Order>;
 
-    std::map<Price, Level, std::greater<Price>> bids_;  // highest price first
-    std::map<Price, Level>                      asks_;  // lowest price first
+    std::pmr::map<Price, Level, std::greater<Price>> bids_;  // highest price first
+    std::pmr::map<Price, Level>                      asks_;  // lowest price first
 
     // Lets cancelOrder jump straight to an order instead of searching the whole book.
     struct Location {
@@ -57,15 +52,13 @@ private:
         Price           price;
         Level::iterator it;
     };
-    std::unordered_map<OrderId, Location> index_;
-
-    std::vector<Trade> trades_;
+    std::pmr::unordered_map<OrderId, Location> index_;
 
     template <typename Book>
-    void match(Order& incoming, Book& opposite, std::vector<Trade>& out);
+    void matchAgainst(Order& incoming, Book& opposite, std::vector<Trade>& out);
 
     template <typename Book>
-    void rest(const Order& order, Book& own);
+    void restIn(const Order& order, Book& own);
 
     template <typename Book>
     static void eraseFrom(Book& book, Price price, Level::iterator it);

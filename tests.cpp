@@ -1,19 +1,23 @@
+#include "Engines.hpp"
 #include "OrderBook.hpp"
 #include "OrderFlow.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 
-int main() {
+// Every test below runs once for each engine: `Book` is the engine's class.
+template <typename Book>
+void engineTests() {
     // 1. Non-crossing limit orders just rest
     {
-        OrderBook b;
+        Book b;
         assert(b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 10}).empty());
         assert(b.addOrder({2, Side::Sell, OrderType::Limit, 10100, 10}).empty());
         assert(b.hasOrder(1) && b.hasOrder(2));
     }
     // 2. Partial fill: resting order keeps the rest
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 20});
         auto t = b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 5});
         assert(t.size() == 1 && t[0].quantity == 5 && t[0].price == 10000);
@@ -22,7 +26,7 @@ int main() {
     }
     // 3. Time priority: older order at the same price fills first
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10000, 5});
         auto t = b.addOrder({3, Side::Buy, OrderType::Limit, 10000, 5});
@@ -31,14 +35,14 @@ int main() {
     }
     // 4. Trade happens at the resting price, not the incoming price
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         auto t = b.addOrder({2, Side::Buy, OrderType::Limit, 10500, 5});
         assert(t.size() == 1 && t[0].price == 10000);
     }
     // 5. Market order sweeps levels; leftover is dropped, not rested
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Buy, OrderType::Limit, 9900, 5});
         auto t = b.addOrder({3, Side::Sell, OrderType::Market, 0, 20});
@@ -47,14 +51,14 @@ int main() {
     }
     // 6. Limit order fills what it can, rests the remainder
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 8});
         assert(b.quantityAt(Side::Buy, 10000) == 3 && b.hasOrder(2));
     }
     // 7. Cancel removes the order; cancelling twice fails
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         assert(b.cancelOrder(1));
         assert(!b.cancelOrder(1));
@@ -62,7 +66,7 @@ int main() {
     }
     // 8. Cancelled order can't be matched
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.cancelOrder(1);
         assert(b.addOrder({2, Side::Buy, OrderType::Market, 0, 5}).empty());
@@ -72,7 +76,7 @@ int main() {
 
     // 9. Price priority (asks): the cheaper ask fills first, even though it arrived later
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10100, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10000, 5});
         auto t = b.addOrder({3, Side::Buy, OrderType::Market, 0, 5});
@@ -81,7 +85,7 @@ int main() {
     }
     // 10. Price priority (bids): the higher bid fills first, even though it arrived later
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 9900, 5});
         b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 5});
         auto t = b.addOrder({3, Side::Sell, OrderType::Market, 0, 5});
@@ -90,7 +94,7 @@ int main() {
     }
     // 11. Price first, then time: sweep goes best price -> oldest at that price -> next price
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10100, 5});   // oldest, but worst price
         b.addOrder({2, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({3, Side::Sell, OrderType::Limit, 10000, 5});
@@ -103,7 +107,7 @@ int main() {
     }
     // 12. A partially filled order keeps its place at the front of the queue
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 10});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10000, 10});
         b.addOrder({3, Side::Buy, OrderType::Limit, 10000, 4});    // #1 now has 6 left
@@ -118,12 +122,12 @@ int main() {
 
     // 13. Empty book has no best prices and no spread
     {
-        OrderBook b;
+        Book b;
         assert(!b.bestBid() && !b.bestAsk() && !b.spread());
     }
     // 14. Best bid is the highest bid, best ask is the lowest ask, spread is the gap
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Buy,  OrderType::Limit, 10050, 5});
         assert(b.bestBid() == 10050);
@@ -135,7 +139,7 @@ int main() {
     }
     // 15. Best prices move when the top level is cancelled or filled
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Buy,  OrderType::Limit, 10050, 5});
         b.addOrder({3, Side::Sell, OrderType::Limit, 10100, 5});
@@ -151,7 +155,7 @@ int main() {
 
     // 16. Depth returns the top N levels, best price first, with orders at a price added together
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 10});
         b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 7});    // same level as #1
         b.addOrder({3, Side::Buy, OrderType::Limit, 9900, 5});
@@ -171,7 +175,7 @@ int main() {
     }
     // 17. Asking for more levels than exist returns what there is; empty side returns nothing
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 10});
         assert(b.depth(Side::Buy, 5).size() == 1);
         assert(b.depth(Side::Buy, 0).empty());
@@ -179,7 +183,7 @@ int main() {
     }
     // 18. Depth reflects partial fills
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 10});
         b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 4});
         auto asks = b.depth(Side::Sell, 1);
@@ -190,7 +194,7 @@ int main() {
 
     // 19. Zero-quantity orders are rejected (limit and market)
     {
-        OrderBook b;
+        Book b;
         Order zeroLimit{1, Side::Buy, OrderType::Limit, 10000, 0};
         assert(b.validate(zeroLimit) == RejectReason::ZeroQuantity);
         assert(b.addOrder(zeroLimit).empty());
@@ -202,7 +206,7 @@ int main() {
     }
     // 20. An id that is already resting is rejected; the original order is untouched
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         Order dup{1, Side::Buy, OrderType::Limit, 10100, 9};
         assert(b.validate(dup) == RejectReason::DuplicateId);
@@ -211,7 +215,7 @@ int main() {
     }
     // 21. A duplicate id must not trade, even if its price would cross
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10100, 5});
         assert(b.addOrder({1, Side::Buy, OrderType::Limit, 10100, 5}).empty());
@@ -219,7 +223,7 @@ int main() {
     }
     // 22. A normal order validates as None
     {
-        OrderBook b;
+        Book b;
         assert(b.validate({1, Side::Buy, OrderType::Limit, 10000, 5}) == RejectReason::None);
     }
 
@@ -227,7 +231,7 @@ int main() {
 
     // 23. getOrder returns the resting order, or nothing if the id isn't in the book
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         auto o = b.getOrder(1);
         assert(o && o->id == 1 && o->price == 10000 && o->quantity == 5);
@@ -236,7 +240,7 @@ int main() {
     // 24. The book stamps each order on arrival; later orders never have earlier timestamps.
     //     (<= not <: two orders can land inside the same clock tick.)
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 5});
         b.addOrder({3, Side::Buy, OrderType::Limit, 9900, 5});
@@ -246,7 +250,7 @@ int main() {
     }
     // 25. A timestamp supplied by the caller is ignored, and a partial fill doesn't change it
     {
-        OrderBook b;
+        Book b;
         Order o{1, Side::Sell, OrderType::Limit, 10000, 10};
         o.timestamp = 1;
         b.addOrder(o);
@@ -260,7 +264,7 @@ int main() {
 
     // 26. History keeps every trade from every order, in the order they happened
     {
-        OrderBook b;
+        Book b;
         assert(b.tradeHistory().empty());
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10100, 5});
@@ -275,7 +279,7 @@ int main() {
     // 27. Trades are timestamped: never before the resting order arrived, never going backwards,
     //     and all trades caused by one incoming order share its arrival time
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10100, 5});
         Timestamp resting1 = b.getOrder(1)->timestamp;
@@ -292,7 +296,7 @@ int main() {
 
     // 28. Modify moves the order to its new price and quantity
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         assert(b.modifyOrder(1, 10050, 8));
         assert(b.quantityAt(Side::Buy, 10000) == 0 && b.quantityAt(Side::Buy, 10050) == 8);
@@ -300,7 +304,7 @@ int main() {
     }
     // 29. Modify loses time priority, even if only the quantity changed
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
         b.addOrder({2, Side::Sell, OrderType::Limit, 10000, 5});
         Timestamp before = b.getOrder(1)->timestamp;
@@ -312,7 +316,7 @@ int main() {
     }
     // 30. Modifying to a price that crosses the spread trades immediately
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Sell, OrderType::Limit, 10100, 5});
         b.addOrder({2, Side::Buy,  OrderType::Limit, 10000, 8});
         assert(b.modifyOrder(2, 10100, 8));
@@ -323,7 +327,7 @@ int main() {
     }
     // 31. Modify fails, and changes nothing, for an unknown id or a zero quantity
     {
-        OrderBook b;
+        Book b;
         b.addOrder({1, Side::Buy, OrderType::Limit, 10000, 5});
         Timestamp before = b.getOrder(1)->timestamp;
         assert(!b.modifyOrder(99, 10000, 5));
@@ -367,7 +371,7 @@ int main() {
         auto prefill = gen.prefill();
         assert(prefill.size() == 500 && gen.bookSize() == 500);
 
-        OrderBook b;
+        Book b;
         for (const Action& a : prefill) {
             assert(a.type == ActionType::Add && a.order.type == OrderType::Limit);
             apply(b, a);
@@ -384,7 +388,7 @@ int main() {
         auto prefill = gen.prefill();
         auto flow    = gen.generate(20000);
 
-        OrderBook b;
+        Book b;
         for (const Action& a : prefill) apply(b, a);
 
         std::size_t limits = 0, markets = 0, cancels = 0, modifies = 0;
@@ -411,5 +415,151 @@ int main() {
         assert(resting > 900 && resting < 1100);
     }
 
-    std::printf("All 34 tests passed.\n");
+    // ---- Phase 4: cases that stress the data structures ----
+
+    // 35. One very long queue with holes: cancel every second order, the rest still fill oldest-first
+    {
+        Book b;
+        for (OrderId id = 1; id <= 2000; ++id) b.addOrder({id, Side::Sell, OrderType::Limit, 10000, 1});
+        for (OrderId id = 2; id <= 2000; id += 2) assert(b.cancelOrder(id));
+        assert(b.quantityAt(Side::Sell, 10000) == 1000 && b.depth(Side::Sell, 1)[0].orderCount == 1000);
+
+        auto t = b.addOrder({5000, Side::Buy, OrderType::Limit, 10000, 600});
+        assert(t.size() == 600);
+        for (std::size_t i = 0; i < t.size(); ++i) assert(t[i].sellId == 2 * i + 1);   // 1, 3, 5, ...
+        assert(!b.hasOrder(1199) && b.hasOrder(1201) && !b.hasOrder(1200));
+
+        b.addOrder({5001, Side::Sell, OrderType::Limit, 10000, 1});                    // joins the back
+        auto rest = b.addOrder({5002, Side::Buy, OrderType::Market, 0, 1000});
+        assert(rest.size() == 401 && rest.front().sellId == 1201 && rest.back().sellId == 5001);
+        assert(!b.bestAsk());
+    }
+    // 36. Prices far apart, and far from where the book started
+    {
+        Book b;
+        b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 5});
+        b.addOrder({2, Side::Buy,  OrderType::Limit, 1, 5});
+        b.addOrder({3, Side::Sell, OrderType::Limit, 150000, 5});
+        b.addOrder({4, Side::Sell, OrderType::Limit, 10100, 5});
+        assert(b.bestBid() == 10000 && b.bestAsk() == 10100);
+        assert(b.depth(Side::Buy, 5).size() == 2 && b.depth(Side::Sell, 5).size() == 2);
+        assert(b.cancelOrder(1) && b.bestBid() == 1);
+        auto t = b.addOrder({5, Side::Buy, OrderType::Market, 0, 8});
+        assert(t.size() == 2 && t[0].price == 10100 && t[1].price == 150000);
+        assert(b.getOrder(3)->quantity == 2);
+    }
+    // 37. Very large order ids work like any other id
+    {
+        Book b;
+        const OrderId big = 1ull << 40;
+        b.addOrder({big, Side::Buy, OrderType::Limit, 10000, 5});
+        b.addOrder({big + 1, Side::Buy, OrderType::Limit, 10000, 5});
+        assert(b.hasOrder(big) && b.getOrder(big + 1)->quantity == 5);
+        assert(b.validate({big, Side::Buy, OrderType::Limit, 10000, 5}) == RejectReason::DuplicateId);
+        assert(b.cancelOrder(big) && !b.hasOrder(big));
+        auto t = b.addOrder({7, Side::Sell, OrderType::Market, 0, 5});
+        assert(t.size() == 1 && t[0].buyId == big + 1);
+    }
+    // 38. A book that outgrows its reserveOrders hint still works, and its ids can be reused
+    {
+        Book b;
+        b.reserveOrders(4);
+        for (OrderId id = 1; id <= 3000; ++id)
+            b.addOrder({id, id % 2 ? Side::Buy : Side::Sell, OrderType::Limit,
+                        static_cast<Price>(id % 2 ? 9999 - id % 50 : 10001 + id % 50), 2});
+        for (OrderId id = 1; id <= 3000; ++id) assert(b.hasOrder(id));
+        for (OrderId id = 1; id <= 3000; id += 3) assert(b.cancelOrder(id));
+        for (OrderId id = 1; id <= 3000; ++id) assert(b.hasOrder(id) == (id % 3 != 1));
+        for (OrderId id = 1; id <= 3000; id += 3) b.addOrder({id, Side::Buy, OrderType::Limit, 9000, 1});
+        assert(b.depth(Side::Buy, 1000).back().price == 9000 && b.depth(Side::Buy, 1000).back().orderCount == 1000);
+        assert(b.tradeHistory().empty());
+    }
+    // 39. reserveTrades keeps the existing history and doesn't invent trades
+    {
+        Book b;
+        b.addOrder({1, Side::Sell, OrderType::Limit, 10000, 5});
+        b.addOrder({2, Side::Buy, OrderType::Limit, 10000, 5});
+        b.reserveTrades(100000);
+        assert(b.tradeHistory().size() == 1 && b.tradeHistory()[0].sellId == 1);
+        b.addOrder({3, Side::Sell, OrderType::Limit, 10000, 5});
+        b.addOrder({4, Side::Buy, OrderType::Limit, 10000, 5});
+        assert(b.tradeHistory().size() == 2 && b.tradeHistory()[1].sellId == 3);
+    }
+}
+
+// ---- Phase 4: differential test ----
+// Run one generated order flow through every engine and check that each one produces
+// exactly the same trades and ends with exactly the same book as engine A.
+
+bool sameTrades(const std::vector<Trade>& x, const std::vector<Trade>& y) {
+    if (x.size() != y.size()) return false;
+    for (std::size_t i = 0; i < x.size(); ++i)        // timestamps are clock readings, so they aren't compared
+        if (x[i].buyId != y[i].buyId || x[i].sellId != y[i].sellId ||
+            x[i].price != y[i].price || x[i].quantity != y[i].quantity) return false;
+    return true;
+}
+
+bool sameBook(const OrderBookBase& x, const OrderBookBase& y, OrderId maxId) {
+    if (x.bestBid() != y.bestBid() || x.bestAsk() != y.bestAsk()) return false;
+    for (Side side : {Side::Buy, Side::Sell}) {
+        auto dx = x.depth(side, static_cast<std::size_t>(-1)), dy = y.depth(side, static_cast<std::size_t>(-1));
+        if (dx.size() != dy.size()) return false;
+        for (std::size_t i = 0; i < dx.size(); ++i)
+            if (dx[i].price != dy[i].price || dx[i].quantity != dy[i].quantity ||
+                dx[i].orderCount != dy[i].orderCount) return false;
+    }
+    for (OrderId id = 1; id <= maxId; ++id) {          // every order, one by one
+        auto ox = x.getOrder(id), oy = y.getOrder(id);
+        if (ox.has_value() != oy.has_value() || x.hasOrder(id) != y.hasOrder(id)) return false;
+        if (ox && (ox->side != oy->side || ox->price != oy->price || ox->quantity != oy->quantity)) return false;
+    }
+    return true;
+}
+
+void differentialTest(std::uint64_t seed, std::size_t bookSize, std::size_t actions) {
+    FlowConfig cfg;
+    cfg.seed = seed;
+    cfg.targetBookSize = bookSize;
+    OrderFlowGenerator gen(cfg);
+    auto prefill = gen.prefill();
+    auto flow    = gen.generate(actions);
+
+    OrderId maxId = 0;
+    for (const Action& a : prefill) maxId = std::max(maxId, a.order.id);
+    for (const Action& a : flow)    maxId = std::max(maxId, a.order.id);
+
+    std::vector<std::unique_ptr<OrderBookBase>> books;
+    for (const std::string& name : engineNames()) {
+        books.push_back(makeBook(name));
+        assert(books.back());
+        for (const Action& a : prefill) apply(*books.back(), a);
+        for (const Action& a : flow)    apply(*books.back(), a);
+    }
+    assert(!books[0]->tradeHistory().empty());
+
+    for (std::size_t i = 1; i < books.size(); ++i) {
+        assert(sameTrades(books[0]->tradeHistory(), books[i]->tradeHistory()));
+        assert(sameBook(*books[0], *books[i], maxId));
+    }
+
+    // Empty both sides with two huge market orders. The trades list every resting order in
+    // the order it fills, so this also proves the queues inside each level are identical.
+    for (auto& book : books) {
+        book->addOrder({maxId + 1, Side::Buy,  OrderType::Market, 0, 4000000000u});
+        book->addOrder({maxId + 2, Side::Sell, OrderType::Market, 0, 4000000000u});
+        assert(!book->bestBid() && !book->bestAsk());
+    }
+    for (std::size_t i = 1; i < books.size(); ++i)
+        assert(sameTrades(books[0]->tradeHistory(), books[i]->tradeHistory()));
+}
+
+int main() {
+    engineTests<OrderBook>();
+    std::printf("A : all 39 tests passed.\n");
+
+    differentialTest(42, 200, 30000);
+    differentialTest(7, 2000, 30000);
+    differentialTest(2026, 20000, 60000);
+    std::printf("Differential test passed: %zu engine(s) agree on every trade and on the final book.\n",
+                engineNames().size());
 }
