@@ -29,16 +29,51 @@ Quantity OrderFlowGenerator::randomQuantity() {
 // Taking the smaller of two random numbers makes small offsets more likely: most orders
 // sit close to the mid and the book gets thinner further away, like a real one.
 Price OrderFlowGenerator::passivePrice(Side side) {
-    std::uint64_t range  = static_cast<std::uint64_t>(config_.maxOffset);
-    Price         offset = 1 + static_cast<Price>(std::min(uniform(0, range - 1), uniform(0, range - 1)));
+    std::uint64_t range = static_cast<std::uint64_t>(config_.maxOffset);
+    Price         offset;
+    if (config_.nearOffset > 0 && static_cast<int>(uniform(1, 100)) <= config_.farPercent) {
+        offset = 1 + static_cast<Price>(uniform(0, range - 1));        // hard flow: an occasional far-away order
+    } else {
+        if (config_.nearOffset > 0) range = static_cast<std::uint64_t>(config_.nearOffset);   // hard flow: cluster at the best price
+        offset = 1 + static_cast<Price>(std::min(uniform(0, range - 1), uniform(0, range - 1)));
+    }
     return side == Side::Buy ? mid_ - offset : mid_ + offset;
+}
+
+// Ids count 1, 2, 3, ... With randomIds on, each count is scrambled into a 64-bit number that
+// looks random. The scramble never maps two different counts to the same number, so the ids
+// stay unique, and it is pure arithmetic, so the same seed still gives the same flow.
+OrderId OrderFlowGenerator::newId() {
+    std::uint64_t z = nextId_++;
+    if (!config_.randomIds) return z;
+    z += 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+FlowConfig standardFlow(std::size_t bookSize) {
+    FlowConfig cfg;
+    cfg.targetBookSize = bookSize;
+    return cfg;
+}
+
+FlowConfig hardFlow(std::size_t bookSize) {
+    FlowConfig cfg;
+    cfg.targetBookSize = bookSize;
+    cfg.midPrice   = 100000;   // $1,000.00, so there is room for a wide band below it
+    cfg.maxOffset  = 5000;     // far orders: up to $50 from the mid -> up to 10,000 price levels
+    cfg.nearOffset = 20;       // most orders: within 20 cents of the mid
+    cfg.farPercent = 5;
+    cfg.randomIds  = true;
+    return cfg;
 }
 
 OrderId OrderFlowGenerator::randomLiveId() { return live_[uniform(0, live_.size() - 1)]; }
 
 Action OrderFlowGenerator::passiveLimit() {
     Side side = randomSide();
-    return {ActionType::Add, {nextId_++, side, OrderType::Limit, passivePrice(side), randomQuantity()}};
+    return {ActionType::Add, {newId(), side, OrderType::Limit, passivePrice(side), randomQuantity()}};
 }
 
 std::vector<Action> OrderFlowGenerator::prefill() {
@@ -65,13 +100,13 @@ Action OrderFlowGenerator::next() {
 
     Action action;
     if (roll <= marketUpTo) {
-        action = {ActionType::Add, {nextId_++, randomSide(), OrderType::Market, 0, randomQuantity()}};
+        action = {ActionType::Add, {newId(), randomSide(), OrderType::Market, 0, randomQuantity()}};
     } else if (roll <= aggressUpTo) {
         // A buy priced above the mid (or a sell below it) reaches into the other side and trades.
         Side  side    = randomSide();
         Price through = static_cast<Price>(uniform(1, 5));
         Price price   = side == Side::Buy ? mid_ + through : mid_ - through;
-        action = {ActionType::Add, {nextId_++, side, OrderType::Limit, price, randomQuantity()}};
+        action = {ActionType::Add, {newId(), side, OrderType::Limit, price, randomQuantity()}};
     } else if (roll <= modifyUpTo && !live_.empty()) {
         OrderId id   = randomLiveId();
         Side    side = book_.getOrder(id)->side;

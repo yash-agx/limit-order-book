@@ -31,7 +31,16 @@ struct FlowConfig {
     int marketPercent     = 5;    // market orders
     int aggressivePercent = 5;    // limit orders priced through the mid, so they trade at once
     int modifyPercent     = 10;   // modify a resting order
+
+    // Options for the "hard" flow. All off by default, so the standard flow is unchanged.
+    bool  randomIds  = false;     // order ids are scattered 64-bit numbers instead of 1, 2, 3, ...
+    Price nearOffset = 0;         // if > 0: most passive orders sit within this many cents of the mid ...
+    int   farPercent = 0;         // ... and this many in 100 land anywhere within maxOffset instead
 };
+
+// The two order flows the benchmark uses.
+FlowConfig standardFlow(std::size_t bookSize);   // Phase 3/4: sequential ids, prices within $2 of the mid
+FlowConfig hardFlow(std::size_t bookSize);       // random ids, a $50-wide band each side, orders clustered at the best price
 
 // Produces a random but reproducible stream of actions: the same seed always gives
 // exactly the same stream.
@@ -66,6 +75,7 @@ private:
     Quantity      randomQuantity();
     Price         passivePrice(Side side);
     OrderId       randomLiveId();
+    OrderId       newId();
 
     Action passiveLimit();
     void   record(const Action& action);

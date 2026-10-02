@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <unordered_set>
 
 // Every test below runs once for each engine: `Book` is the engine's class.
 template <typename Book>
@@ -487,6 +488,40 @@ void engineTests() {
         b.addOrder({4, Side::Buy, OrderType::Limit, 10000, 5});
         assert(b.tradeHistory().size() == 2 && b.tradeHistory()[1].sellId == 3);
     }
+    // 40. The hard flow (random ids, wide price band, clustered prices) is valid too:
+    //     ids never repeat, every cancel/modify targets a resting order, and the replay
+    //     ends with exactly the book the generator expects
+    {
+        OrderFlowGenerator gen(hardFlow(2000));
+        auto prefill = gen.prefill();
+        auto flow    = gen.generate(20000);
+
+        Book b;
+        std::size_t smallIds = 0, farOrders = 0, limits = 0;
+        for (const Action& a : prefill) apply(b, a);
+        for (const Action& a : flow) {
+            if (a.type == ActionType::Add) {
+                assert(b.validate(a.order) == RejectReason::None);   // a repeated id would be a DuplicateId
+                smallIds += a.order.id < 1000000;
+                if (a.order.type == OrderType::Limit) {
+                    ++limits;
+                    Price mid = (*b.bestBid() + *b.bestAsk()) / 2;
+                    farOrders += a.order.price > mid + 100 || a.order.price < mid - 100;
+                }
+            } else {
+                assert(b.hasOrder(a.order.id));
+            }
+            apply(b, a);
+        }
+        assert(smallIds == 0);                                       // ids are scattered, not 1, 2, 3, ...
+        assert(farOrders > 0 && farOrders * 10 < limits);            // far-away orders exist but are rare
+        assert(*b.bestBid() < *b.bestAsk());
+
+        std::size_t resting = 0;
+        for (Side side : {Side::Buy, Side::Sell})
+            for (const DepthLevel& lvl : b.depth(side, static_cast<std::size_t>(-1))) resting += lvl.orderCount;
+        assert(resting == gen.bookSize());
+    }
 }
 
 // ---- Phase 4: differential test ----
@@ -501,7 +536,7 @@ bool sameTrades(const std::vector<Trade>& x, const std::vector<Trade>& y) {
     return true;
 }
 
-bool sameBook(const OrderBookBase& x, const OrderBookBase& y, OrderId maxId) {
+bool sameBook(const OrderBookBase& x, const OrderBookBase& y, const std::vector<OrderId>& ids) {
     if (x.bestBid() != y.bestBid() || x.bestAsk() != y.bestAsk()) return false;
     for (Side side : {Side::Buy, Side::Sell}) {
         auto dx = x.depth(side, static_cast<std::size_t>(-1)), dy = y.depth(side, static_cast<std::size_t>(-1));
@@ -510,7 +545,7 @@ bool sameBook(const OrderBookBase& x, const OrderBookBase& y, OrderId maxId) {
             if (dx[i].price != dy[i].price || dx[i].quantity != dy[i].quantity ||
                 dx[i].orderCount != dy[i].orderCount) return false;
     }
-    for (OrderId id = 1; id <= maxId; ++id) {          // every order, one by one
+    for (OrderId id : ids) {                           // every order, one by one
         auto ox = x.getOrder(id), oy = y.getOrder(id);
         if (ox.has_value() != oy.has_value() || x.hasOrder(id) != y.hasOrder(id)) return false;
         if (ox && (ox->side != oy->side || ox->price != oy->price || ox->quantity != oy->quantity)) return false;
@@ -518,17 +553,19 @@ bool sameBook(const OrderBookBase& x, const OrderBookBase& y, OrderId maxId) {
     return true;
 }
 
-void differentialTest(std::uint64_t seed, std::size_t bookSize, std::size_t actions) {
-    FlowConfig cfg;
+void differentialTest(FlowConfig cfg, std::uint64_t seed, std::size_t actions) {
     cfg.seed = seed;
-    cfg.targetBookSize = bookSize;
     OrderFlowGenerator gen(cfg);
     auto prefill = gen.prefill();
     auto flow    = gen.generate(actions);
 
-    OrderId maxId = 0;
-    for (const Action& a : prefill) maxId = std::max(maxId, a.order.id);
-    for (const Action& a : flow)    maxId = std::max(maxId, a.order.id);
+    std::unordered_set<OrderId> seen;                  // every order id the flow uses
+    for (const Action& a : prefill) seen.insert(a.order.id);
+    for (const Action& a : flow)    seen.insert(a.order.id);
+    std::vector<OrderId> ids(seen.begin(), seen.end());
+
+    OrderId spare1 = 1, spare2 = 2;                    // two ids the flow never used, for the final sweep
+    while (seen.count(spare1) || seen.count(spare2)) { spare1 += 2; spare2 += 2; }
 
     std::vector<std::unique_ptr<OrderBookBase>> books;
     for (const std::string& name : engineNames()) {
@@ -541,14 +578,14 @@ void differentialTest(std::uint64_t seed, std::size_t bookSize, std::size_t acti
 
     for (std::size_t i = 1; i < books.size(); ++i) {
         assert(sameTrades(books[0]->tradeHistory(), books[i]->tradeHistory()));
-        assert(sameBook(*books[0], *books[i], maxId));
+        assert(sameBook(*books[0], *books[i], ids));
     }
 
     // Empty both sides with two huge market orders. The trades list every resting order in
     // the order it fills, so this also proves the queues inside each level are identical.
     for (auto& book : books) {
-        book->addOrder({maxId + 1, Side::Buy,  OrderType::Market, 0, 4000000000u});
-        book->addOrder({maxId + 2, Side::Sell, OrderType::Market, 0, 4000000000u});
+        book->addOrder({spare1, Side::Buy,  OrderType::Market, 0, 4000000000u});
+        book->addOrder({spare2, Side::Sell, OrderType::Market, 0, 4000000000u});
         assert(!book->bestBid() && !book->bestAsk());
     }
     for (std::size_t i = 1; i < books.size(); ++i)
@@ -557,21 +594,26 @@ void differentialTest(std::uint64_t seed, std::size_t bookSize, std::size_t acti
 
 int main() {
     engineTests<OrderBook>();
-    std::printf("A : all 39 tests passed.\n");
+    std::printf("A : all 40 tests passed.\n");
     engineTests<FlatBook>();
-    std::printf("B : all 39 tests passed.\n");
+    std::printf("B : all 40 tests passed.\n");
     engineTests<PoolBook>();
-    std::printf("C1: all 39 tests passed.\n");
+    std::printf("C1: all 40 tests passed.\n");
     engineTests<IntrusiveBookC2>();
-    std::printf("C2: all 39 tests passed.\n");
+    std::printf("C2: all 40 tests passed.\n");
     engineTests<IntrusiveBookC3>();
-    std::printf("C3: all 39 tests passed.\n");
+    std::printf("C3: all 40 tests passed.\n");
     engineTests<CustomBook>();
-    std::printf("C4: all 39 tests passed.\n");
+    std::printf("C4: all 40 tests passed.\n");
+    engineTests<HybridBook>();
+    std::printf("D : all 40 tests passed.\n");
 
-    differentialTest(42, 200, 30000);
-    differentialTest(7, 2000, 30000);
-    differentialTest(2026, 20000, 60000);
+    differentialTest(standardFlow(200), 42, 30000);
+    differentialTest(standardFlow(2000), 7, 30000);
+    differentialTest(standardFlow(20000), 2026, 60000);
+    differentialTest(hardFlow(200), 42, 30000);
+    differentialTest(hardFlow(2000), 7, 30000);
+    differentialTest(hardFlow(20000), 2026, 60000);
     std::printf("Differential test passed: %zu engine(s) agree on every trade and on the final book.\n",
                 engineNames().size());
 }

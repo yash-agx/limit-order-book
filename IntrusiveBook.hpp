@@ -13,18 +13,19 @@
 //   C2 = pool + intrusive list
 //   C3 = C2 + open-addressing hash map for the id index
 //   C4 = C3 + cache-friendly node layout   (this is the complete engine C)
+//   D  = C4 with engine B's flat price-level array in place of the std::map
 //
 // Shared by every step:
 //   - All orders live in ONE pre-allocated array, the pool. An order is referred to by its
 //     position in that array (a 32-bit "node index"), not by a pointer.
 //   - The queue at each price is an intrusive doubly-linked list: the prev/next links are
 //     stored inside the order itself, so there is no separate list node to allocate.
-//   - Price levels stay in a sorted std::map, as in engine A, with pool-allocated nodes.
 //
-// The class is a template with two interchangeable parts, so the engine code below is
+// The class is a template with three interchangeable parts, so the engine code below is
 // written once and the steps differ only in which parts are plugged in:
-//   Index - finds an order's node index from its id
-//   Pool  - stores the nodes
+//   Index    - finds an order's node index from its id
+//   Pool     - stores the nodes
+//   LevelSet - finds the price level for a price, and knows which level is best
 
 const std::uint32_t kNoNode = 0xFFFFFFFFu;   // "no node": plays the role of a null pointer
 
@@ -237,7 +238,120 @@ private:
 // ---------------------------------------------------------------------------------------
 // The engine
 // ---------------------------------------------------------------------------------------
-template <typename Index, typename Pool>
+// One price level: just the two ends of its linked list, and how long it is.
+struct ListLevel {
+    std::uint32_t head  = kNoNode;   // oldest order
+    std::uint32_t tail  = kNoNode;   // newest order
+    std::uint32_t count = 0;
+};
+
+// ---------------------------------------------------------------------------------------
+// Price levels for one side of the book, version 1: a sorted std::map (pool-allocated).
+// `Compare` decides which price is "best": std::greater for bids, std::less for asks.
+// ---------------------------------------------------------------------------------------
+template <typename Compare>
+class MapLevels {
+public:
+    bool       empty() const     { return map_.empty(); }
+    Price      bestPrice() const { return map_.begin()->first; }
+    ListLevel& best()            { return map_.begin()->second; }
+
+    ListLevel& get(Price price)  { return map_[price]; }               // creates the level if it doesn't exist
+    ListLevel& find(Price price) { return map_.find(price)->second; }  // the level must exist
+    void       levelEmptied(Price price) { map_.erase(price); }        // its last order just left
+
+    // Call visit(price, level) for each level, best price first, until it returns false.
+    template <typename Visit>
+    void forEach(Visit visit) const {
+        for (const auto& [price, level] : map_)
+            if (!visit(price, level)) return;
+    }
+
+private:
+    std::pmr::unsynchronized_pool_resource   memory_;        // for the map nodes; declared first
+    std::pmr::map<Price, ListLevel, Compare> map_{&memory_};
+};
+
+// ---------------------------------------------------------------------------------------
+// Price levels for one side of the book, version 2: engine B's idea - a flat array indexed
+// by price. levels_[price - base_] is the level for that price, so reaching a level is one
+// subtraction instead of a walk down a tree. The best price is remembered, and when the
+// best level empties we step along the array to the next level that has orders.
+// ---------------------------------------------------------------------------------------
+template <bool IsBidSide>
+class FlatLevels {
+public:
+    bool       empty() const     { return occupied_ == 0; }
+    Price      bestPrice() const { return best_; }
+    ListLevel& best()            { return at(best_); }
+
+    // The level a new order is about to join (so an empty level counts as occupied from now).
+    ListLevel& get(Price price) {
+        cover(price);
+        ListLevel& level = at(price);
+        if (level.count == 0) {
+            if (occupied_ == 0 || isBetter(price, best_)) best_ = price;
+            ++occupied_;
+        }
+        return level;
+    }
+    ListLevel& find(Price price) { return at(price); }
+
+    void levelEmptied(Price price) {
+        --occupied_;
+        if (occupied_ > 0 && price == best_)
+            while (at(best_).count == 0) best_ += kAway;   // some level still has orders, so this stops
+    }
+
+    template <typename Visit>
+    void forEach(Visit visit) const {
+        std::size_t left = occupied_;
+        for (Price price = best_; left > 0; price += kAway) {
+            const ListLevel& level = levels_[static_cast<std::size_t>(price - base_)];
+            if (level.count == 0) continue;
+            --left;
+            if (!visit(price, level)) return;
+        }
+    }
+
+private:
+    static constexpr Price kAway    = IsBidSide ? -1 : 1;   // the direction that leads away from the other side
+    static constexpr Price kPadding = 1024;                 // spare levels kept beyond the prices in use
+
+    static bool isBetter(Price a, Price b) { return IsBidSide ? a > b : a < b; }
+
+    std::vector<ListLevel> levels_;      // covers prices base_ .. base_ + size - 1
+    Price                  base_ = 0;
+    Price                  best_ = 0;    // only meaningful while occupied_ > 0
+    std::size_t            occupied_ = 0;   // how many levels have at least one order
+
+    ListLevel& at(Price price) { return levels_[static_cast<std::size_t>(price - base_)]; }
+
+    void cover(Price price) {            // grow the array until it includes this price
+        if (levels_.empty()) {
+            base_ = price - kPadding;
+            levels_.resize(static_cast<std::size_t>(2 * kPadding));
+        } else if (price < base_) {      // extend downwards (rare: every level moves up)
+            std::size_t extra = static_cast<std::size_t>(base_ - price + kPadding);
+            levels_.insert(levels_.begin(), extra, ListLevel{});
+            base_ -= static_cast<Price>(extra);
+        } else if (price - base_ >= static_cast<Price>(levels_.size())) {
+            levels_.resize(static_cast<std::size_t>(price - base_ + kPadding));
+        }
+    }
+};
+
+// Which kind of levels the two sides of a book use.
+struct MapLevelSet {
+    using Bids = MapLevels<std::greater<Price>>;   // highest price first
+    using Asks = MapLevels<std::less<Price>>;      // lowest price first
+};
+struct FlatLevelSet {
+    using Bids = FlatLevels<true>;
+    using Asks = FlatLevels<false>;
+};
+
+template <typename Index, typename Pool, typename LevelSet>
 class IntrusiveBook : public OrderBookBase {
 public:
     bool cancelOrder(OrderId id) override {
@@ -260,11 +374,11 @@ public:
 
     std::optional<Price> bestBid() const override {
         if (bids_.empty()) return std::nullopt;
-        return bids_.begin()->first;
+        return bids_.bestPrice();
     }
     std::optional<Price> bestAsk() const override {
         if (asks_.empty()) return std::nullopt;
-        return asks_.begin()->first;
+        return asks_.bestPrice();
     }
 
     std::vector<DepthLevel> depth(Side side, std::size_t levels) const override {
@@ -288,21 +402,13 @@ protected:
     }
 
 private:
-    // One price level: just the two ends of its linked list, and how long it is.
-    struct Level {
-        std::uint32_t head  = kNoNode;   // oldest order
-        std::uint32_t tail  = kNoNode;   // newest order
-        std::uint32_t count = 0;
-    };
-
-    std::pmr::unsynchronized_pool_resource           memory_;          // for the map nodes; declared first
-    std::pmr::map<Price, Level, std::greater<Price>> bids_{&memory_};  // highest price first
-    std::pmr::map<Price, Level>                      asks_{&memory_};  // lowest price first
+    typename LevelSet::Bids bids_;
+    typename LevelSet::Asks asks_;
     Pool  pool_;
     Index index_;
 
     // Take node n out of its level's list by joining its two neighbours to each other.
-    void unlink(Level& level, std::uint32_t n) {
+    void unlink(ListLevel& level, std::uint32_t n) {
         std::uint32_t prev = pool_[n].prev, next = pool_[n].next;
         if (prev != kNoNode) pool_[prev].next = next; else level.head = next;
         if (next != kNoNode) pool_[next].prev = prev; else level.tail = prev;
@@ -310,7 +416,7 @@ private:
     }
 
     // Unlink node n, forget its id and give the node back to the pool.
-    void destroy(Level& level, std::uint32_t n) {
+    void destroy(ListLevel& level, std::uint32_t n) {
         unlink(level, n);
         index_.erase(pool_[n].id);
         pool_.release(n);
@@ -319,23 +425,23 @@ private:
     template <typename Book>
     void matchAgainst(Order& incoming, Book& opposite, std::vector<Trade>& out) {
         while (incoming.quantity > 0 && !opposite.empty()) {
-            auto best = opposite.begin();                  // best price level on the other side
-            if (!crosses(incoming, best->first)) break;    // prices don't overlap -> stop
+            Price price = opposite.bestPrice();            // best price level on the other side
+            if (!crosses(incoming, price)) break;          // prices don't overlap -> stop
 
-            Level& level = best->second;
+            ListLevel& level = opposite.best();
             while (incoming.quantity > 0 && level.head != kNoNode) {
                 std::uint32_t n       = level.head;        // oldest order at this price goes first
                 auto&         resting = pool_[n];
                 Quantity      qty     = std::min(incoming.quantity, resting.quantity);
 
-                out.push_back(makeTrade(incoming, resting.id, best->first, qty));
+                out.push_back(makeTrade(incoming, resting.id, price, qty));
 
                 incoming.quantity -= qty;
                 resting.quantity  -= qty;                  // partial fill if this stays > 0
 
                 if (resting.quantity == 0) destroy(level, n);
             }
-            if (level.head == kNoNode) opposite.erase(best);   // remove empty price levels
+            if (level.head == kNoNode) opposite.levelEmptied(price);
         }
     }
 
@@ -349,7 +455,7 @@ private:
         node.quantity = order.quantity;
         pool_.timestamp(n) = order.timestamp;
 
-        Level& level = own[order.price];                   // creates the level if it doesn't exist
+        ListLevel& level = own.get(order.price);           // creates the level if it doesn't exist
         node.prev = level.tail;                            // join the back of the queue
         node.next = kNoNode;
         if (level.tail != kNoNode) pool_[level.tail].next = n; else level.head = n;
@@ -361,24 +467,27 @@ private:
 
     template <typename Book>
     void removeFrom(Book& book, std::uint32_t n) {
-        auto found = book.find(pool_[n].price);
-        destroy(found->second, n);
-        if (found->second.count == 0) book.erase(found);
+        Price      price = pool_[n].price;
+        ListLevel& level = book.find(price);
+        destroy(level, n);
+        if (level.count == 0) book.levelEmptied(price);
     }
 
     template <typename Book>
     std::vector<DepthLevel> topLevels(const Book& book, std::size_t levels) const {
         std::vector<DepthLevel> out;
-        for (const auto& [price, level] : book) {
-            if (out.size() == levels) break;
+        book.forEach([&](Price price, const ListLevel& level) {
+            if (out.size() == levels) return false;
             Quantity total = 0;
             for (std::uint32_t n = level.head; n != kNoNode; n = pool_[n].next) total += pool_[n].quantity;
             out.push_back({price, total, level.count});
-        }
+            return true;
+        });
         return out;
     }
 };
 
-using IntrusiveBookC2 = IntrusiveBook<StdIndex, FatPool>;   // pool + intrusive list
-using IntrusiveBookC3 = IntrusiveBook<OpenIndex, FatPool>;  // + open-addressing hash map
-using CustomBook      = IntrusiveBook<OpenIndex, SlimPool>; // + cache-friendly layout = the full engine C
+using IntrusiveBookC2 = IntrusiveBook<StdIndex,  FatPool,  MapLevelSet>;   // pool + intrusive list
+using IntrusiveBookC3 = IntrusiveBook<OpenIndex, FatPool,  MapLevelSet>;   // + open-addressing hash map
+using CustomBook      = IntrusiveBook<OpenIndex, SlimPool, MapLevelSet>;   // + cache-friendly layout = the full engine C
+using HybridBook      = IntrusiveBook<OpenIndex, SlimPool, FlatLevelSet>;  // engine D: C with B's flat price array
