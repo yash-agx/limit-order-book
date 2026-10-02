@@ -11,6 +11,7 @@
 // optimisation can be measured on its own (the "ablation"):
 //
 //   C2 = pool + intrusive list
+//   C3 = C2 + open-addressing hash map for the id index
 //
 // Shared by every step:
 //   - All orders live in ONE pre-allocated array, the pool. An order is referred to by its
@@ -43,6 +44,94 @@ public:
 private:
     std::pmr::unsynchronized_pool_resource             memory_;        // declared first: outlives the map
     std::pmr::unordered_map<OrderId, std::uint32_t>    map_{&memory_};
+};
+
+// ---------------------------------------------------------------------------------------
+// Index, version 2: an open-addressing hash map.
+//
+// The standard hash map keeps every entry in its own separately allocated node and reaches
+// it by following pointers. Here all entries sit in one flat array of 16-byte slots. An id
+// is hashed to a "home" slot; if that slot is taken, the entry goes in the next free slot
+// along (linear probing). A lookup starts at the home slot and walks forward until it finds
+// the id or hits an empty slot - usually within the same cache line.
+// ---------------------------------------------------------------------------------------
+class OpenIndex {
+public:
+    OpenIndex() { resize(16); }
+
+    void reserve(std::size_t orders) {
+        std::size_t capacity = slots_.size();
+        while (capacity < orders * 2) capacity *= 2;        // keep the table at most half full
+        if (capacity != slots_.size()) resize(capacity);
+    }
+
+    std::uint32_t find(OrderId id) const {
+        for (std::size_t i = home(id); slots_[i].node != kNoNode; i = (i + 1) & mask_)
+            if (slots_[i].id == id) return slots_[i].node;
+        return kNoNode;
+    }
+
+    void insert(OrderId id, std::uint32_t node) {
+        if ((count_ + 1) * 2 > slots_.size()) resize(slots_.size() * 2);
+        place(id, node);
+        ++count_;
+    }
+
+    // Removing an entry must not leave a gap that would cut a later lookup short. So after
+    // emptying the slot, walk forward and pull back any entry that had been pushed past
+    // its home slot by the one just removed ("backward-shift deletion").
+    void erase(OrderId id) {
+        std::size_t gap = home(id);
+        while (slots_[gap].id != id || slots_[gap].node == kNoNode) gap = (gap + 1) & mask_;
+
+        for (std::size_t next = (gap + 1) & mask_; slots_[next].node != kNoNode; next = (next + 1) & mask_) {
+            std::size_t wants = home(slots_[next].id);
+            // The entry at `next` may move into the gap unless its home slot lies after the
+            // gap and at or before `next` (counting round the end of the array).
+            bool homeBetween = gap <= next ? (wants > gap && wants <= next)
+                                           : (wants > gap || wants <= next);
+            if (!homeBetween) {
+                slots_[gap] = slots_[next];
+                gap = next;
+            }
+        }
+        slots_[gap].node = kNoNode;
+        --count_;
+    }
+
+private:
+    struct Slot {
+        OrderId       id   = 0;
+        std::uint32_t node = kNoNode;      // kNoNode marks an empty slot
+    };
+
+    std::vector<Slot> slots_;              // the size is always a power of two
+    std::size_t       mask_  = 0;          // size - 1: "& mask_" wraps an index round the end
+    int               shift_ = 0;
+    std::size_t       count_ = 0;
+
+    // Multiplying by a large odd number scrambles the id; the top bits of the result are the
+    // best mixed, so those are the ones kept. Order ids are often 1, 2, 3, ... and this
+    // spreads them evenly across the table.
+    std::size_t home(OrderId id) const {
+        return static_cast<std::size_t>((id * 0x9E3779B97F4A7C15ull) >> shift_);
+    }
+
+    void place(OrderId id, std::uint32_t node) {
+        std::size_t i = home(id);
+        while (slots_[i].node != kNoNode) i = (i + 1) & mask_;
+        slots_[i] = {id, node};
+    }
+
+    void resize(std::size_t capacity) {
+        std::vector<Slot> old = std::move(slots_);
+        slots_.assign(capacity, Slot{});
+        mask_  = capacity - 1;
+        shift_ = 64;
+        for (std::size_t c = capacity; c > 1; c /= 2) --shift_;   // shift_ = 64 - log2(capacity)
+        for (const Slot& s : old)
+            if (s.node != kNoNode) place(s.id, s.node);
+    }
 };
 
 // ---------------------------------------------------------------------------------------
@@ -236,3 +325,4 @@ private:
 };
 
 using IntrusiveBookC2 = IntrusiveBook<StdIndex, FatPool>;   // pool + intrusive list
+using IntrusiveBookC3 = IntrusiveBook<OpenIndex, FatPool>;  // + open-addressing hash map
