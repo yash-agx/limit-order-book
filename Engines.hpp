@@ -11,6 +11,7 @@
 //   C1  A + memory pool (PoolBook)
 //   C2  C1 + intrusive linked list, orders in one pre-allocated array (IntrusiveBook)
 //   C3  C2 + open-addressing hash map for the id index
+//   C4  C3 + cache-friendly node layout: the complete engine C (CustomBook)
 const std::vector<std::string>& engineNames();
 
 // Build an engine by name. Returns nullptr if the name is unknown.

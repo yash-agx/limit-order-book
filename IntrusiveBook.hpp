@@ -12,6 +12,7 @@
 //
 //   C2 = pool + intrusive list
 //   C3 = C2 + open-addressing hash map for the id index
+//   C4 = C3 + cache-friendly node layout   (this is the complete engine C)
 //
 // Shared by every step:
 //   - All orders live in ONE pre-allocated array, the pool. An order is referred to by its
@@ -180,6 +181,60 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------
+// Pool, version 2: a cache-friendly layout.
+//
+// The CPU loads memory in 64-byte "cache lines". A 48-byte FatNode often lies across two
+// of them, so touching one order can cost two trips to memory. SlimNode keeps only the
+// fields that matching and cancelling actually use, in exactly 32 bytes, and alignas(32)
+// makes every node start on a 32-byte boundary: two nodes fill one cache line exactly and
+// no node ever straddles two. The timestamp is "cold" (stored but never read while
+// matching), so it moves out to a separate array at the same position.
+// ---------------------------------------------------------------------------------------
+struct alignas(32) SlimNode {
+    OrderId       id;          // 8 bytes
+    Price         price;       // 8
+    Quantity      quantity;    // 4
+    std::uint32_t prev;        // 4
+    std::uint32_t next;        // 4
+    Side          side;        // 4
+};
+static_assert(sizeof(SlimNode) == 32, "SlimNode must be exactly half a cache line");
+
+class SlimPool {
+public:
+    void reserve(std::size_t orders) {
+        nodes_.reserve(orders);
+        timestamps_.reserve(orders);
+    }
+
+    std::uint32_t allocate() {
+        if (firstFree_ != kNoNode) {
+            std::uint32_t n = firstFree_;
+            firstFree_ = nodes_[n].next;
+            return n;
+        }
+        nodes_.emplace_back();
+        timestamps_.emplace_back();                        // the cold array grows in step
+        return static_cast<std::uint32_t>(nodes_.size() - 1);
+    }
+    void release(std::uint32_t n) {
+        nodes_[n].next = firstFree_;
+        firstFree_ = n;
+    }
+
+    SlimNode&       operator[](std::uint32_t n)       { return nodes_[n]; }
+    const SlimNode& operator[](std::uint32_t n) const { return nodes_[n]; }
+
+    Timestamp& timestamp(std::uint32_t n)       { return timestamps_[n]; }
+    Timestamp  timestamp(std::uint32_t n) const { return timestamps_[n]; }
+
+private:
+    std::vector<SlimNode>  nodes_;         // hot: read and written on every match and cancel
+    std::vector<Timestamp> timestamps_;    // cold: written once when the order arrives
+    std::uint32_t          firstFree_ = kNoNode;
+};
+
+// ---------------------------------------------------------------------------------------
 // The engine
 // ---------------------------------------------------------------------------------------
 template <typename Index, typename Pool>
@@ -326,3 +381,4 @@ private:
 
 using IntrusiveBookC2 = IntrusiveBook<StdIndex, FatPool>;   // pool + intrusive list
 using IntrusiveBookC3 = IntrusiveBook<OpenIndex, FatPool>;  // + open-addressing hash map
+using CustomBook      = IntrusiveBook<OpenIndex, SlimPool>; // + cache-friendly layout = the full engine C
