@@ -1,7 +1,12 @@
-"""Run the benchmark for every book size and rebuild the CSVs in results/.
+"""Benchmark every engine at every book size and rebuild the CSVs in results/.
 
-Each size runs in its own fresh bench.exe process, so one size's memory use
-can't leak into the next size's memory numbers.
+Each measurement is its own fresh bench.exe process (2 warm-up replays, then 1 measured
+run), so one engine's memory use can't leak into another's numbers.
+
+The engines are interleaved: for each book size we do run 1 of every engine, then run 2 of
+every engine, and so on, instead of all of A's runs followed by all of B's. If the machine
+speeds up or slows down part-way through (heat, background programs), every engine is hit
+about equally. The starting engine also rotates each run so none is always first.
 
     python analysis/run_bench.py
 """
@@ -13,9 +18,10 @@ ROOT = Path(__file__).resolve().parent.parent      # the order-book folder
 BENCH = ROOT / "build" / "bench.exe"
 RESULTS = ROOT / "results"
 
+ENGINES = ["A", "B", "C1", "C2", "C3", "C4"]
 BOOK_SIZES = [1_000, 10_000, 100_000, 1_000_000]   # resting orders in the book before measuring
 ACTIONS = 1_000_000                                # actions measured per run
-REPEATS = 5                                        # measured runs per size (after 2 warm-up runs)
+RUNS = 5                                           # measured runs per engine per size
 
 
 def main():
@@ -27,7 +33,10 @@ def main():
         (RESULTS / name).unlink(missing_ok=True)   # bench.exe appends, so start from empty files
 
     for size in BOOK_SIZES:
-        subprocess.run([str(BENCH), str(size), str(ACTIONS), str(REPEATS), str(RESULTS)], check=True)
+        for run in range(1, RUNS + 1):
+            shift = (run - 1) % len(ENGINES)
+            for engine in ENGINES[shift:] + ENGINES[:shift]:
+                subprocess.run([str(BENCH), engine, str(size), str(ACTIONS), str(run), str(RESULTS)], check=True)
 
     print(f"Results written to {RESULTS}")
 
