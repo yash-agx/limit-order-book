@@ -1,5 +1,10 @@
 """Benchmark every engine at every book size and rebuild the CSVs in results/.
 
+Two experiments:
+  standard flow - every engine (A, B, the ablation steps C1..C4, and D)
+  hard flow     - A, B, C (= C4) and D on random order ids, a wide price band and
+                  prices clustered at the best price
+
 Each measurement is its own fresh bench.exe process (2 warm-up replays, then 1 measured
 run), so one engine's memory use can't leak into another's numbers.
 
@@ -18,7 +23,10 @@ ROOT = Path(__file__).resolve().parent.parent      # the order-book folder
 BENCH = ROOT / "build" / "bench.exe"
 RESULTS = ROOT / "results"
 
-ENGINES = ["A", "B", "C1", "C2", "C3", "C4"]
+EXPERIMENTS = {
+    "standard": ["A", "B", "C1", "C2", "C3", "C4", "D"],
+    "hard": ["A", "B", "C4", "D"],
+}
 BOOK_SIZES = [1_000, 10_000, 100_000, 1_000_000]   # resting orders in the book before measuring
 ACTIONS = 1_000_000                                # actions measured per run
 RUNS = 5                                           # measured runs per engine per size
@@ -32,11 +40,13 @@ def main():
     for name in ("summary.csv", "latency_hist.csv", "latency_by_type.csv"):
         (RESULTS / name).unlink(missing_ok=True)   # bench.exe appends, so start from empty files
 
-    for size in BOOK_SIZES:
-        for run in range(1, RUNS + 1):
-            shift = (run - 1) % len(ENGINES)
-            for engine in ENGINES[shift:] + ENGINES[:shift]:
-                subprocess.run([str(BENCH), engine, str(size), str(ACTIONS), str(run), str(RESULTS)], check=True)
+    for flow, engines in EXPERIMENTS.items():
+        for size in BOOK_SIZES:
+            for run in range(1, RUNS + 1):
+                shift = (run - 1) % len(engines)
+                for engine in engines[shift:] + engines[:shift]:
+                    subprocess.run([str(BENCH), engine, str(size), str(ACTIONS), str(run), str(RESULTS), flow],
+                                   check=True)
 
     print(f"Results written to {RESULTS}")
 

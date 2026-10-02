@@ -1,6 +1,6 @@
 // Benchmark for the order-book engines.
 //
-//   bench.exe <engine> [bookSize] [actions] [run] [outDir]
+//   bench.exe <engine> [bookSize] [actions] [run] [outDir] [standard|hard]
 //
 // Fills a book of the chosen engine with `bookSize` resting orders, then replays `actions`
 // generated actions against it and measures throughput, per-action latency and memory.
@@ -173,8 +173,9 @@ int main(int argc, char** argv) {
     std::size_t actions = argc > 3 ? std::strtoull(argv[3], nullptr, 10) : 1000000;
     int         run     = argc > 4 ? std::atoi(argv[4]) : 1;
     std::string outDir  = argc > 5 ? argv[5] : "results";
-    if (!makeBook(w.engine) || w.bookSize == 0 || actions == 0) {
-        std::printf("usage: bench <engine> [bookSize] [actions] [run] [outDir]\nengines:");
+    std::string flow    = argc > 6 ? argv[6] : "standard";
+    if (!makeBook(w.engine) || w.bookSize == 0 || actions == 0 || (flow != "standard" && flow != "hard")) {
+        std::printf("usage: bench <engine> [bookSize] [actions] [run] [outDir] [standard|hard]\nengines:");
         for (const std::string& name : engineNames()) std::printf(" %s", name.c_str());
         std::printf("\n");
         return 1;
@@ -187,8 +188,7 @@ int main(int argc, char** argv) {
     double nsPerTick = calibrateNsPerTick();
 
     // ---- generate the order flow (same seed -> same flow, for every engine and every run) ----
-    FlowConfig cfg;
-    cfg.targetBookSize = w.bookSize;
+    FlowConfig cfg = flow == "hard" ? hardFlow(w.bookSize) : standardFlow(w.bookSize);
     std::size_t finalBookSize = 0;
     {
         OrderFlowGenerator gen(cfg);
@@ -204,13 +204,26 @@ int main(int argc, char** argv) {
     // ---- memory of a full book = how much the process grows while building one ----
     // Windows hands out memory in chunks, so one small book is too small to see.
     // Build enough identical books to hold about 200,000 orders and divide.
-    double bookMemoryMb = 0;
+    double bookMemoryMb = 0, bookMemoryEndMb = 0;
     {
         std::size_t copies = std::max<std::size_t>(1, 200000 / w.bookSize);
         double      before = readMemory().privateMb;
         std::vector<BookPtr> books;
         for (std::size_t i = 0; i < copies; ++i) books.push_back(buildBook(w, false));
         bookMemoryMb = (readMemory().privateMb - before) / static_cast<double>(copies);
+
+        // ---- memory of one book after the whole flow has run through it ----
+        // Shows whether an engine keeps growing while the number of resting orders stays the
+        // same. Done while the books above are still alive: nothing has been freed yet, so
+        // all growth is new memory. The trade history is reserved before the first reading,
+        // which keeps it out of the number. (One book only, so small books are approximate.)
+        BookPtr book = makeBook(w.engine);
+        book->reserveTrades(w.flow.size());
+        before = readMemory().privateMb;
+        book->reserveOrders(w.bookSize + w.bookSize / 8 + 1024);
+        for (const Action& a : w.prefill) apply(*book, a);
+        for (const Action& a : w.flow)    apply(*book, a);
+        bookMemoryEndMb = readMemory().privateMb - before;
     }
 
     // ---- one untimed replay: count trades and price levels, and check the engine's answer ----
@@ -257,41 +270,41 @@ int main(int argc, char** argv) {
     double max  = static_cast<double>(ticks.back()) * nsPerTick;
     double peak = readMemory().peakMb;
 
-    std::printf("%-3s book %8zu run %d: %10.0f actions/s  avg %6.1f  p50 %6.1f  p99 %7.1f  p99.9 %8.1f  worst %9.0f ns  book %8.3f MB\n",
-                w.engine.c_str(), w.bookSize, run, rate, avg, p50, p99, p999, max, bookMemoryMb);
+    std::printf("%-8s %-3s book %8zu run %d: %10.0f actions/s  avg %6.1f  p50 %6.1f  p99 %7.1f  p99.9 %8.1f  worst %9.0f ns  book %8.3f MB, %8.3f MB after the flow\n",
+                flow.c_str(), w.engine.c_str(), w.bookSize, run, rate, avg, p50, p99, p999, max, bookMemoryMb, bookMemoryEndMb);
 
     // ---- write the CSVs ----
     std::filesystem::create_directories(outDir);
     std::filesystem::path dir(outDir);
 
     std::ofstream summary = openCsv(dir / "summary.csv",
-        "engine,book_size,run,actions,orders_per_sec,avg_ns,p50_ns,p99_ns,p999_ns,max_ns,"
-        "book_memory_mb,peak_memory_mb,final_book_size,price_levels,trades,trade_checksum");
-    summary << w.engine << ',' << w.bookSize << ',' << run << ',' << actions << ',' << static_cast<std::uint64_t>(rate) << ','
+        "flow,engine,book_size,run,actions,orders_per_sec,avg_ns,p50_ns,p99_ns,p999_ns,max_ns,"
+        "book_memory_mb,book_memory_end_mb,peak_memory_mb,final_book_size,price_levels,trades,trade_checksum");
+    summary << flow << ',' << w.engine << ',' << w.bookSize << ',' << run << ',' << actions << ',' << static_cast<std::uint64_t>(rate) << ','
             << avg << ',' << p50 << ',' << p99 << ',' << p999 << ',' << max << ','
-            << bookMemoryMb << ',' << peak << ',' << finalBookSize << ',' << priceLevels << ',' << trades << ','
+            << bookMemoryMb << ',' << bookMemoryEndMb << ',' << peak << ',' << finalBookSize << ',' << priceLevels << ',' << trades << ','
             << tradeChecksum << '\n';
 
     std::ofstream byKind = openCsv(dir / "latency_by_type.csv",
-                                   "engine,book_size,run,action,count,avg_ns,p50_ns,p99_ns");
+                                   "flow,engine,book_size,run,action,count,avg_ns,p50_ns,p99_ns");
     for (int k = 0; k < kKinds; ++k) {
         std::vector<std::uint64_t>& t = ticksByKind[k];
         if (t.empty()) continue;
         std::sort(t.begin(), t.end());
         double kindSum = 0;
         for (std::uint64_t x : t) kindSum += static_cast<double>(x);
-        byKind << w.engine << ',' << w.bookSize << ',' << run << ',' << kKindNames[k] << ',' << t.size() << ','
+        byKind << flow << ',' << w.engine << ',' << w.bookSize << ',' << run << ',' << kKindNames[k] << ',' << t.size() << ','
                << kindSum * nsPerTick / static_cast<double>(t.size()) << ','
                << percentile(t, 0.50) * nsPerTick << ',' << percentile(t, 0.99) * nsPerTick << '\n';
     }
 
     std::ofstream hist = openCsv(dir / "latency_hist.csv",
-                                 "engine,book_size,run,bucket_lo_ns,bucket_hi_ns,count");
+                                 "flow,engine,book_size,run,bucket_lo_ns,bucket_hi_ns,count");
     for (std::size_t b = 0; b < histogram.size(); ++b) {
         if (histogram[b] == 0) continue;
         double lo = std::pow(10.0, static_cast<double>(b) / kBucketsPerDecade);
         double hi = std::pow(10.0, static_cast<double>(b + 1) / kBucketsPerDecade);
-        hist << w.engine << ',' << w.bookSize << ',' << run << ',' << lo << ',' << hi << ',' << histogram[b] << '\n';
+        hist << flow << ',' << w.engine << ',' << w.bookSize << ',' << run << ',' << lo << ',' << hi << ',' << histogram[b] << '\n';
     }
     return 0;
 }
