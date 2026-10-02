@@ -8,6 +8,7 @@
 //
 //   A   baseline: std::map + std::list + std::unordered_map
 //   B   flat array of price levels + vector queues + array index (FlatBook)
+//   C1  A + memory pool (PoolBook)
 const std::vector<std::string>& engineNames();
 
 // Build an engine by name. Returns nullptr if the name is unknown.
