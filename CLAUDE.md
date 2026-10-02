@@ -68,7 +68,13 @@ Phase 4 findings (full tables: run `python analysis\plot_results.py`):
 - Standard flow ranking by throughput: D > B > C > A at 10k and 100k (B ~ C within noise at 100k); D ~ B at 1k;
   B > D > C > A at 1M.
 - Hard flow ranking: D > C > B > A at every size (C ~ B within noise at 10k). B falls from 2.4–3.5x A to
-  1.25–1.5x A; A, C and D barely change. So B's standard-flow lead depended on sequential ids and a narrow price band.
+  1.25–1.5x A, so B's standard-flow lead depended on sequential ids and a narrow price band.
+- Hard vs standard throughput, per engine (1k / 10k / 100k / 1M; "noise" = run ranges overlap):
+  - A: +4% / noise / -8% / -29%
+  - B: -44% / -49% / -55% / -73%
+  - C: +23% / noise / -6% / noise
+  - D: noise / -13% / -13% / -5%
+  Every engine moves somewhere; B moves by far the most, D never by more than 13%.
 - D vs C (flat price array instead of `std::map`, nothing else changed): +86% / +77% / +59% / +19% at
   1k / 10k / 100k / 1M on the standard flow, +49% / +53% / +48% / +15% on the hard flow.
 - Ablation A → C → D (standard flow): pool is small and inconsistent (noise at 1k and 100k, -5% at 10k, +16% at 1M;
@@ -77,8 +83,13 @@ Phase 4 findings (full tables: run `python analysis\plot_results.py`):
 - p99.9: D is best or tied for best at every size on both flows. B's p99.9 is no better than A's at 100k
   (standard) and worse than A's at 1k and 10k (hard).
 - B's memory grows while the book stays the same size: 0.27 → 15.7 MB at 1k and 90 → 124 MB at 1M over 1M
-  actions (standard flow); 1.3 → 9.2 MB and 121 → 144 MB (hard flow). A, C and D stay flat.
-- The trade-history fix cut A's worst case from ~1 ms to ~0.1–0.2 ms without changing throughput.
+  actions (standard flow); 1.3 → 9.2 MB and 121 → 144 MB (hard flow). A, C and D grow by at most 0.4 MB
+  at any size (the largest is C at 10k on the hard flow, 1.03 → 1.43 MB).
+- Worst-case latency is too noisy to rank engines overall: the run ranges overlap in most comparisons. The
+  largest clear gap is the hard flow at 1M, where B (0.56–0.69 ms) is worse than C and D (under 0.2 ms).
+- The trade-history fix removed the vector-doubling spikes and did not change throughput. A's median worst
+  case is now about 0.1 ms at 10k–1M, but single runs still reach up to 2.9 ms from causes I did not identify
+  (A's 1k median was 0.16 ms in the first session and 0.73 ms in the second).
 - Not tried: a cheaper index for D's new orders at 1M (the remaining gap to B on the standard flow), hardware
   cache-miss counters, real exchange data.
 
@@ -94,6 +105,7 @@ Phase 3 baseline (implementation A, i7-14650HX, 1M actions, median of 5 repeats)
 Findings to carry into Phase 4:
 - Slowdown with book size comes from cache misses, not Big-O: there are only ~400 price levels at every size.
 - At small sizes, memory allocation dominates (one new+delete pair costs ~110 ns here; an add does two allocations).
+  **Phase 4 did not support this guess:** swapping in a memory pool had no reliable effect.
 - Worst-case spikes (~1 ms) happen when the `trades_` vector doubles and copies itself.
 - ~130 bytes per resting order, though `Order` itself is 40 bytes.
 - Absolute numbers move with machine state (one earlier session ran ~2.5x slower); compare runs done back to back.
