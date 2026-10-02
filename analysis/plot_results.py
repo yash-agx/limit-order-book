@@ -136,7 +136,7 @@ def plot_latency_distribution(summary, hist):
 
         ax.bar(lo, share, width=width, align="edge", color=BLUE, edgecolor=SURFACE, linewidth=0.6)
         ax.set_xscale("log")
-        ax.set_xlim(10, 100_000)
+        ax.set_xlim(30, 10_000)
         ax.grid(axis="x", visible=False)
         ax.set_ylabel("% of actions")
 
@@ -147,8 +147,8 @@ def plot_latency_distribution(summary, hist):
         ax.text(0.01, 0.92, f"{size_label(size)} resting orders", transform=ax.transAxes,
                 fontweight="bold", va="top")
 
-    axes[-1].set_xticks([10, 100, 1000, 10_000, 100_000])
-    axes[-1].set_xticklabels(["10 ns", "100 ns", "1 µs", "10 µs", "100 µs"])
+    axes[-1].set_xticks([100, 1000, 10_000])
+    axes[-1].set_xticklabels(["100 ns", "1 µs", "10 µs"])
     axes[-1].set_xlabel("Latency of one action (log scale)")
     fig.subplots_adjust(left=0.09, right=0.97, top=0.87, bottom=0.08, hspace=0.12)
     fig.savefig(RESULTS / "latency_distribution.png", dpi=160)
