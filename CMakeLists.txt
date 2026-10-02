@@ -19,7 +19,7 @@ else()
     set(KEEP_ASSERTS -UNDEBUG)
 endif()
 
-set(ENGINE_SOURCES OrderBookBase.cpp OrderBook.cpp Engines.cpp OrderFlow.cpp)
+set(ENGINE_SOURCES OrderBookBase.cpp OrderBook.cpp FlatBook.cpp Engines.cpp OrderFlow.cpp)
 
 # The engine, compiled once and shared by the demo and the tests
 add_library(orderbook STATIC ${ENGINE_SOURCES})

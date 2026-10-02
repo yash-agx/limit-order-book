@@ -1,4 +1,5 @@
 #include "Engines.hpp"
+#include "FlatBook.hpp"
 #include "OrderBook.hpp"
 #include "OrderFlow.hpp"
 #include <algorithm>
@@ -556,6 +557,8 @@ void differentialTest(std::uint64_t seed, std::size_t bookSize, std::size_t acti
 int main() {
     engineTests<OrderBook>();
     std::printf("A : all 39 tests passed.\n");
+    engineTests<FlatBook>();
+    std::printf("B : all 39 tests passed.\n");
 
     differentialTest(42, 200, 30000);
     differentialTest(7, 2000, 30000);
