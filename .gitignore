@@ -1,0 +1,35 @@
+# CMake / compiler build output
+build/
+build-*/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+*.exe
+*.dll
+*.o
+*.obj
+*.a
+*.lib
+*.pdb
+*.ilk
+
+# Python (analysis scripts only)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and tools
+.vscode/
+.vs/
+.idea/
+.claude/
+
+# Large or throwaway data (the CSVs and PNGs in results/ are small and are kept on purpose)
+*.zip
+*.7z
+*.tar.gz
+*.bin
+*.dump
+*.log
