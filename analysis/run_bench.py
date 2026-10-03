@@ -19,7 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent      # the order-book folder
+ROOT = Path(__file__).resolve().parent.parent      # the repo root
 BENCH = ROOT / "build" / "bench.exe"
 RESULTS = ROOT / "results"
 
