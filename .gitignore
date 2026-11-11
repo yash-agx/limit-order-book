@@ -1,4 +1,4 @@
-# CMake / compiler build output
+﻿# CMake / compiler build output
 build/
 build-*/
 cmake-build-*/
@@ -24,7 +24,6 @@ venv/
 .vscode/
 .vs/
 .idea/
-.claude/
 
 # Large or throwaway data (the CSVs and PNGs in results/ are small and are kept on purpose)
 *.zip
@@ -34,6 +33,4 @@ venv/
 *.dump
 *.log
 
-CLAUDE.md
 
-CLAUDE.md

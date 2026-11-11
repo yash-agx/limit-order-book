@@ -256,3 +256,8 @@ array dominates and that part is inherent. At a 1M book nothing changes, because
 is holding a million orders. Throughput is unchanged: in interleaved runs every comparison has
 overlapping run ranges (the noise rule), the largest median gap being −8% on the standard flow at 1k,
 where levels empty and refill most often. Every table above was re-measured with the fix in place.
+
+
+## Notes
+
+Built with AI coding assistance. The design decisions and analysis are my own.
