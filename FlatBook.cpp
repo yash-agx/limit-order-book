@@ -6,6 +6,7 @@ namespace {
 const Price       kPadding     = 1024;        // spare price levels kept on each side of the book
 const OrderId     kDirectLimit = 1u << 22;    // ids below this (about 4 million) use the array index
 const std::size_t kSlack       = 32;          // don't bother cleaning a level for fewer dead slots than this
+const std::size_t kKeepSlots   = 8;           // an emptied level keeps a buffer this small, but gives back a bigger one
 
 }  // namespace
 
@@ -59,8 +60,17 @@ void FlatBook::moveBest(Side side) {
 
 void FlatBook::tidy(Level& level) {
     if (level.live == 0) {                               // nothing left: start again from an empty vector
-        level.firstSeq += level.orders.size();           // (clear() keeps the memory, ready for the next orders)
-        level.orders.clear();
+        level.firstSeq += level.orders.size();
+        if (level.orders.capacity() > kKeepSlots) {
+            // The level grew big at some point. clear() would keep that whole buffer for a
+            // price that may never trade again - and the book touches far more prices over a
+            // long run than it holds orders at any moment, so those buffers add up to more
+            // memory than the live orders. Give this one back; a small buffer is kept, since
+            // levels near the best price empty and refill constantly.
+            std::vector<Order>().swap(level.orders);
+        } else {
+            level.orders.clear();                        // keeps the memory, ready for the next orders
+        }
         level.head = 0;
         return;
     }
