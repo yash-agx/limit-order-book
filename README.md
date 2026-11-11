@@ -108,19 +108,26 @@ Median of 5 runs. Throughput is in million actions per second, with the slowest�
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 8.21 (8.06–8.33) | 19.73 (15.55–20.57) | 13.41 (12.57–13.98) | 24.96 (18.90–27.08) |
-| 10k | 6.88 (6.82–7.33) | 17.56 (14.26–18.16) | 12.93 (9.36–13.26) | 22.90 (22.03–23.50) |
-| 100k | 4.42 (4.33–4.47) | 13.66 (9.73–14.32) | 10.90 (10.86–11.07) | 17.37 (16.97–17.49) |
-| 1M | 2.35 (2.32–2.37) | 8.29 (8.22–8.42) | 5.50 (5.44–5.66) | 6.51 (6.44–6.63) |
+| 1k | 7.45 (6.88–8.00) | 18.50 (14.47–19.13) | 10.61 (10.24–13.52) | 25.48 (22.33–26.77) |
+| 10k | 6.77 (6.42–6.95) | 17.51 (17.09–19.63) | 13.47 (12.33–13.99) | 24.02 (14.98–24.70) |
+| 100k | 4.56 (3.84–4.87) | 14.27 (9.28–15.89) | 11.19 (9.65–12.06) | 18.06 (14.08–18.87) |
+| 1M | 2.44 (2.38–2.46) | 8.77 (8.40–8.91) | 5.78 (5.43–5.87) | 6.84 (6.72–6.90) |
+
+Ranking by throughput: D > B > C > A at 1k; D ~ B > C > A at 10k; D ~ B ~ C > A at 100k (the run
+ranges overlap, so B and C cannot be separated there); B > D > C > A at 1M.
 
 ### Throughput – hard flow
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 8.53 (8.45–8.61) | 11.03 (10.31–11.33) | 16.46 (15.64–16.70) | 24.60 (23.78–24.64) |
-| 10k | 7.21 (6.25–7.51) | 9.00 (8.90–9.14) | 13.07 (8.92–13.30) | 20.02 (17.60–20.70) |
-| 100k | 4.06 (3.93–4.28) | 6.11 (5.76–6.47) | 10.20 (9.16–10.57) | 15.14 (14.84–15.61) |
-| 1M | 1.66 (1.59–1.72) | 2.26 (2.17–2.28) | 5.36 (5.29–5.45) | 6.17 (5.61–6.33) |
+| 1k | 8.46 (8.04–8.59) | 11.51 (11.21–11.66) | 16.61 (16.41–16.91) | 24.93 (24.55–25.37) |
+| 10k | 7.47 (7.29–7.54) | 9.08 (8.88–9.27) | 13.44 (12.83–13.53) | 20.44 (20.35–20.73) |
+| 100k | 3.86 (3.70–4.32) | 6.04 (5.92–6.53) | 10.56 (9.92–11.00) | 15.59 (13.87–15.83) |
+| 1M | 1.89 (1.77–1.93) | 2.58 (2.32–2.60) | 5.78 (5.50–5.91) | 6.84 (5.64–6.99) |
+
+Ranking by throughput: D > C > B > A at 1k, 10k and 100k; D ~ C > B > A at 1M. B's lead over A falls
+from x2.5–x3.6 on the standard flow to x1.2–x1.6 here, so most of it depended on sequential order ids
+and a narrow price band. D never gives up more than 15% of its standard-flow throughput.
 
 ![Throughput by engine on both order flows](results/throughput_vs_book_size.png)
 
@@ -130,19 +137,24 @@ Standard flow:
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 115 / 329 / 593 | 41 / 185 / 360 | 67 / 253 / 475 | 36 / 176 / 274 |
-| 10k | 132 / 389 / 2301 | 41 / 245 / 985 | 70 / 259 / 785 | 43 / 202 / 385 |
-| 100k | 204 / 601 / 4295 | 45 / 253 / 4181 | 87 / 296 / 861 | 58 / 253 / 513 |
-| 1M | 403 / 1182 / 8448 | 45 / 421 / 3947 | 195 / 532 / 4487 | 135 / 496 / 4019 |
+| 1k | 118 / 350 / 1129 | 42 / 207 / 443 | 66 / 261 / 477 | 37 / 177 / 297 |
+| 10k | 138 / 396 / 2111 | 40 / 219 / 656 | 67 / 250 / 450 | 42 / 197 / 314 |
+| 100k | 202 / 583 / 4205 | 43 / 264 / 4217 | 83 / 281 / 588 | 55 / 223 / 355 |
+| 1M | 397 / 1125 / 5398 | 43 / 412 / 2688 | 186 / 514 / 3995 | 130 / 476 / 957 |
 
 Hard flow:
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 110 / 323 / 995 | 81 / 351 / 1405 | 55 / 209 / 383 | 41 / 178 / 302 |
-| 10k | 134 / 375 / 2285 | 95 / 364 / 5461 | 66 / 256 / 844 | 45 / 208 / 391 |
-| 100k | 222 / 622 / 4137 | 138 / 507 / 3841 | 89 / 348 / 1904 | 63 / 257 / 539 |
-| 1M | 567 / 1690 / 12612 | 411 / 1514 / 6816 | 193 / 596 / 4232 | 146 / 553 / 3864 |
+| 1k | 110 / 320 / 569 | 80 / 341 / 1066 | 54 / 207 / 330 | 40 / 173 / 265 |
+| 10k | 126 / 356 / 1535 | 94 / 354 / 5318 | 65 / 254 / 466 | 45 / 206 / 337 |
+| 100k | 224 / 649 / 4532 | 139 / 521 / 3779 | 86 / 324 / 920 | 62 / 250 / 468 |
+| 1M | 510 / 1413 / 4409 | 374 / 1289 / 3572 | 184 / 565 / 3719 | 137 / 519 / 800 |
+
+D has the best or joint-best p99.9 at every size on both flows. B's is the worst of the four at 100k
+on the standard flow (4217 ns, no better than A's) and at 10k on the hard flow (5318 ns, worse than
+A's): its lazily-removed dead slots have to be cleaned up eventually, and the clean-up all lands on
+one unlucky action.
 
 Each timing includes about 6 ns of measurement overhead.
 
@@ -157,10 +169,14 @@ step; "noise" means the run ranges overlap.
 
 | Resting orders | A | + pool | + intrusive list | + hash map | + layout (= C) | + flat levels (= D) |
 |---|---|---|---|---|---|---|
-| 1k | 8.21 | 8.15 (noise) | 8.92 (noise) | 13.68 (+53%) | 13.41 (noise) | 24.96 (+86%) |
-| 10k | 6.88 | 6.53 (−5%) | 7.92 (+21%) | 12.72 (+61%) | 12.93 (noise) | 22.90 (+77%) |
-| 100k | 4.42 | 4.34 (noise) | 6.04 (+39%) | 10.82 (+79%) | 10.90 (noise) | 17.37 (+59%) |
-| 1M | 2.35 | 2.71 (+16%) | 3.30 (+22%) | 5.41 (+64%) | 5.50 (noise) | 6.51 (+19%) |
+| 1k | 7.45 | 6.20 (noise) | 7.69 (noise) | 12.84 (+67%) | 10.61 (noise) | 25.48 (+140%) |
+| 10k | 6.77 | 6.07 (−10%) | 6.99 (+15%) | 13.25 (+90%) | 13.47 (noise) | 24.02 (+78%) |
+| 100k | 4.56 | 3.79 (noise) | 5.56 (+47%) | 11.14 (+100%) | 11.19 (noise) | 18.06 (+61%) |
+| 1M | 2.44 | 2.72 (+12%) | 3.29 (+21%) | 5.57 (+70%) | 5.78 (noise) | 6.84 (+18%) |
+
+The memory pool — the change I expected to matter most after Phase 3 — is the only step that never
+clearly helps: noise at 1k and 100k, −10% at 10k, +12% at 1M. Replacing the hash map is the biggest
+single win, and replacing `std::map` with a flat array of price levels is bigger still.
 
 ![Ablation from A to C to D](results/ablation_throughput.png)
 
@@ -172,14 +188,17 @@ the 1k book are approximate.
 
 | Resting orders | Flow | A | B | C | D |
 |---|---|---|---|---|---|
-| 1k | standard | 0.15 → 0.07 | 0.27 → 15.74 | 0.24 → 0.21 | 0.25 → 0.25 |
-| 10k | standard | 1.24 → 1.23 | 1.02 → 18.02 | 0.99 → 1.17 | 1.01 → 1.03 |
-| 100k | standard | 12.21 → 12.23 | 8.85 → 29.82 | 8.59 → 8.80 | 8.62 → 8.84 |
-| 1M | standard | 122.21 → 121.04 | 89.56 → 124.18 | 107.18 → 107.19 | 107.23 → 107.24 |
-| 1k | hard | 0.14 → 0.09 | 1.33 → 9.22 | 0.22 → 0.20 | 0.36 → 0.35 |
-| 10k | hard | 1.23 → 1.23 | 2.26 → 8.55 | 1.03 → 1.43 | 1.10 → 1.13 |
-| 100k | hard | 12.44 → 12.64 | 13.94 → 24.19 | 8.94 → 9.18 | 8.61 → 8.89 |
-| 1M | hard | 123.36 → 121.81 | 120.92 → 144.06 | 108.25 → 108.11 | 107.33 → 107.51 |
+| 1k | standard | 0.15 → 0.00 | 0.27 → 14.21 | 0.24 → 0.21 | 0.25 → 0.25 |
+| 10k | standard | 1.19 → 1.23 | 0.96 → 17.23 | 0.93 → 1.17 | 0.95 → 1.00 |
+| 100k | standard | 11.47 → 12.16 | 8.06 → 28.71 | 7.98 → 8.39 | 8.46 → 8.43 |
+| 1M | standard | 122.48 → 121.09 | 89.66 → 120.48 | 107.19 → 107.20 | 107.23 → 107.24 |
+| 1k | hard | 0.14 → 0.23 | 1.33 → 1.59 | 0.22 → 0.21 | 0.36 → 0.35 |
+| 10k | hard | 1.27 → 1.10 | 2.34 → 4.25 | 0.95 → 1.43 | 1.09 → 1.05 |
+| 100k | hard | 12.34 → 12.64 | 13.90 → 21.17 | 8.89 → 9.14 | 8.63 → 8.60 |
+| 1M | hard | 123.16 → 121.81 | 121.00 → 144.32 | 108.22 → 108.12 | 107.32 → 107.50 |
+
+A, C and D stay flat, as they should: the book holds the same number of orders at both points. B is
+the exception, and the next section explains why.
 
 ![Book memory after the flow](results/memory_after_flow.png)
 
@@ -189,36 +208,37 @@ at 1M orders for both flows. `python analysis\plot_results.py` reprints every ta
 ### Why engine B's memory spikes
 
 B is the only engine whose memory grows while the number of resting orders stays the same
-(0.27 → 15.74 MB at a 1k book, 1.33 → 9.22 MB on the hard flow). Both numbers come from B's two
-"index by the number itself instead of hashing" tricks, and only one of them was intended.
+(0.27 → 14.21 MB at a 1k book on the standard flow). Both of B's "index by the number itself instead
+of hashing" tricks contribute, and only one of them was intended.
 
 **1. The order-id array (a real design cost).** `direct_` is a `std::deque<Slot>` indexed by order
 id, so finding an order is one subtraction and one load instead of a hash. It therefore has to be as
-long as the *largest id ever seen*, not as long as the book. The standard flow issues sequential
-ids, so 1,000,000 actions use about 527,000 ids: 527,000 × 24 bytes = **12.1 MB**, whatever the book
-size. Nothing can be freed — an array indexed by id cannot have holes punched out of it — so this is
-the price of the design, not a bug. (The hard flow uses random 64-bit ids, which skip `direct_`
-entirely and go to the `overflow_` hash map, so it pays nothing here.)
+long as the *largest id ever seen*, not as long as the book. The standard flow issues sequential ids,
+so 1,000,000 actions use about 527,000 ids: 527,000 × 24 bytes = **12.1 MB**, whatever the book size.
+That is why the growth is almost the same at 1k and at 10k. Nothing can be freed — an array indexed
+by id cannot have holes punched out of it — so this is the price of the design, not a bug. (The hard
+flow uses random 64-bit ids, which skip `direct_` entirely and go to the `overflow_` hash map, so it
+pays nothing here.)
 
 **2. Price levels keeping buffers they no longer need (a bug, now fixed).** Each price level is a
 `std::vector<Order>`, and `tidy()` used to empty a level with `clear()`, which keeps the allocated
 buffer "ready for the next orders". That is right for the handful of levels at the best price, which
 empty and refill constantly, but wrong for the book as a whole: over a long run the book touches far
-more prices than it ever holds orders at, and each one of those keeps a buffer sized to its own peak
-— including the slack of up to `kSlack` (32) dead slots per level that the lazy-deletion scheme
-leaves behind. After 1M actions on the hard flow, 9,832 *empty* levels were still holding 199,383
-order slots (**7.6 MB**) for 999 live orders.
+more prices than it ever holds orders at, and each one of those kept a buffer sized to its own peak —
+including the slack of up to `kSlack` (32) dead slots per level that the lazy-deletion scheme leaves
+behind. After 1M actions on the hard flow, 9,832 *empty* levels were still holding 199,383 order
+slots (**7.6 MB**) for 999 live orders.
 
-The fix is one line in `tidy()`: when a level empties, release the buffer
+The fix is one branch in `tidy()`: when a level empties, release the buffer
 (`std::vector<Order>().swap(level.orders)`) unless it is already small (≤ `kKeepSlots` = 8 slots),
-which keeps the hot levels fast. Buffers held by empty levels at a 1k book:
+which keeps the hot levels allocation-free. Slots held by empty levels at a 1k book:
 
 | Flow | Before | After |
 |---|---|---|
 | standard | 41,778 slots (1.6 MB) | 4,239 slots (0.16 MB) |
 | hard | 199,383 slots (7.6 MB) | 11,615 slots (0.44 MB) |
 
-Memory after the flow, old vs new binary run back to back (3 runs each):
+Memory after the flow, old and new binaries run back to back (3 runs each):
 
 | Resting orders | Flow | Before | After |
 |---|---|---|---|
@@ -231,11 +251,8 @@ Memory after the flow, old vs new binary run back to back (3 runs each):
 | 100k | hard | 24.30 MB | 21.20 MB |
 | 1M | hard | 144.1 MB | 144.2 MB |
 
-The hard flow at 1k improves by 84%; the standard flow barely moves, because there the 12.1 MB
-id array dominates and that part is inherent. At a 1M book nothing changes, because then the book
-really is holding a million orders. Throughput is unchanged: in interleaved runs every comparison
-has overlapping run ranges (the noise rule), the largest median gap being −8% on the standard flow
-at 1k, where levels empty and refill most often.
-
-Note that the tables above this section, and the CSVs in `results/`, were measured **before** this
-fix; only B's memory column is affected.
+The hard flow at 1k improves by 84%; the standard flow barely moves, because there the 12.1 MB id
+array dominates and that part is inherent. At a 1M book nothing changes, because then the book really
+is holding a million orders. Throughput is unchanged: in interleaved runs every comparison has
+overlapping run ranges (the noise rule), the largest median gap being −8% on the standard flow at 1k,
+where levels empty and refill most often. Every table above was re-measured with the fix in place.
