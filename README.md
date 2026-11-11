@@ -185,3 +185,57 @@ the 1k book are approximate.
 
 More output is in `results/`: the per-run CSVs, latency by action type, and latency distribution charts
 at 1M orders for both flows. `python analysis\plot_results.py` reprints every table.
+
+### Why engine B's memory spikes
+
+B is the only engine whose memory grows while the number of resting orders stays the same
+(0.27 → 15.74 MB at a 1k book, 1.33 → 9.22 MB on the hard flow). Both numbers come from B's two
+"index by the number itself instead of hashing" tricks, and only one of them was intended.
+
+**1. The order-id array (a real design cost).** `direct_` is a `std::deque<Slot>` indexed by order
+id, so finding an order is one subtraction and one load instead of a hash. It therefore has to be as
+long as the *largest id ever seen*, not as long as the book. The standard flow issues sequential
+ids, so 1,000,000 actions use about 527,000 ids: 527,000 × 24 bytes = **12.1 MB**, whatever the book
+size. Nothing can be freed — an array indexed by id cannot have holes punched out of it — so this is
+the price of the design, not a bug. (The hard flow uses random 64-bit ids, which skip `direct_`
+entirely and go to the `overflow_` hash map, so it pays nothing here.)
+
+**2. Price levels keeping buffers they no longer need (a bug, now fixed).** Each price level is a
+`std::vector<Order>`, and `tidy()` used to empty a level with `clear()`, which keeps the allocated
+buffer "ready for the next orders". That is right for the handful of levels at the best price, which
+empty and refill constantly, but wrong for the book as a whole: over a long run the book touches far
+more prices than it ever holds orders at, and each one of those keeps a buffer sized to its own peak
+— including the slack of up to `kSlack` (32) dead slots per level that the lazy-deletion scheme
+leaves behind. After 1M actions on the hard flow, 9,832 *empty* levels were still holding 199,383
+order slots (**7.6 MB**) for 999 live orders.
+
+The fix is one line in `tidy()`: when a level empties, release the buffer
+(`std::vector<Order>().swap(level.orders)`) unless it is already small (≤ `kKeepSlots` = 8 slots),
+which keeps the hot levels fast. Buffers held by empty levels at a 1k book:
+
+| Flow | Before | After |
+|---|---|---|
+| standard | 41,778 slots (1.6 MB) | 4,239 slots (0.16 MB) |
+| hard | 199,383 slots (7.6 MB) | 11,615 slots (0.44 MB) |
+
+Memory after the flow, old vs new binary run back to back (3 runs each):
+
+| Resting orders | Flow | Before | After |
+|---|---|---|---|
+| 1k | standard | 15.80 MB | 14.20 MB |
+| 10k | standard | 18.02 MB | 17.22 MB |
+| 100k | standard | 30.02 MB | 28.75 MB |
+| 1M | standard | 124.1 MB | 121.6 MB |
+| 1k | hard | 9.21 MB | 1.50 MB |
+| 10k | hard | 8.56 MB | 4.25 MB |
+| 100k | hard | 24.30 MB | 21.20 MB |
+| 1M | hard | 144.1 MB | 144.2 MB |
+
+The hard flow at 1k improves by 84%; the standard flow barely moves, because there the 12.1 MB
+id array dominates and that part is inherent. At a 1M book nothing changes, because then the book
+really is holding a million orders. Throughput is unchanged: in interleaved runs every comparison
+has overlapping run ranges (the noise rule), the largest median gap being −8% on the standard flow
+at 1k, where levels empty and refill most often.
+
+Note that the tables above this section, and the CSVs in `results/`, were measured **before** this
+fix; only B's memory column is affected.
