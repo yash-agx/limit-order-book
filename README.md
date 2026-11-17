@@ -375,63 +375,213 @@ The zeros in the last three columns are the honesty point, measured: real ITCH a
 
 ### Results
 
-Run `python analysis\run_itch.py && python analysis\plot_itch.py` to produce the throughput and
-latency tables and the charts in `results_itch/`. The timing numbers in this section are **from single
-exploratory replays of the full AAPL day, not the 5-run medians**, and are here only to show the shape
-of the result; the committed tables come from the full session.
+100 runs: 5 symbols x 4 engines x 5 runs, each a fresh process, interleaved. Median of the 5 runs,
+with the slowest–fastest run in brackets. Every run finished with all four engines on an identical
+book, and the book was never crossed.
 
-Book memory, however, is deterministic, and it is where real data changes the answer. Full AAPL day,
-one book, measured after the 09:30 prefill and again after the whole day:
+| Symbol | Engine | M actions/s | [spread] | vs A | p50 ns | p99 ns | p99.9 ns | worst | book MB | after MB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| AMZN (477k actions) | A | 6.50 | [6.36–6.54] | – | 148 | 348 | 2326 | 60 µs | 0.60 | 5.12 |
+| | B | 11.93 | [7.50–12.81] | x1.83 | 80 | 260 | 1050 | 185 µs | 1938 | 1942 |
+| | C | 9.36 | [5.87–9.42] | x1.44 (noise) | 107 | 265 | 2085 | 237 µs | 3.69 | 4.12 |
+| | D | **4.35** | [3.57–4.51] | **x0.67** | 47 | 196 | 661 | **48.7 ms** | 236 | 463 |
+| CSCO (529k) | A | 11.39 | [9.95–11.46] | – | 91 | 201 | 303 | 45 µs | 0.16 | 1.94 |
+| | B | 15.92 | [15.00–16.03] | x1.40 | 64 | 200 | 455 | 572 µs | 1937 | 1940 |
+| | C | 19.93 | [19.50–20.39] | x1.75 | 51 | 140 | 234 | 27 µs | 1.13 | 1.23 |
+| | D | **28.93** | [26.25–29.34] | **x2.54** | 39 | 97 | 186 | 48 µs | 231 | 231 |
+| INTC (741k) | A | 11.50 | [11.28–11.66] | – | 90 | 203 | 382 | 31 µs | 0.11 | 1.28 |
+| | B | 16.40 | [15.62–16.47] | x1.43 | 65 | 188 | 357 | 90 µs | 1939 | 1940 |
+| | C | 22.71 | [21.13–22.84] | x1.98 | 46 | 136 | 238 | 28 µs | 0.92 | 1.09 |
+| | D | **32.57** | [32.35–33.16] | **x2.83** | 35 | 78 | 140 | 27 µs | 230 | 230 |
+| MSFT (1.19M) | A | 10.31 | [10.13–10.34] | – | 98 | 233 | 428 | 56 µs | 0.38 | 3.22 |
+| | B | 14.22 | [13.71–15.38] | x1.38 | 69 | 195 | 371 | 335 µs | 1937 | 1940 |
+| | C | 18.09 | [18.00–18.24] | x1.76 | 57 | 154 | 263 | 32 µs | 2.07 | 2.34 |
+| | D | **28.70** | [27.99–28.87] | **x2.79** | 39 | 103 | 240 | 33 µs | 232 | 232 |
+| AAPL (1.48M) | A | 7.57 | [7.46–8.13] | – | 124 | 303 | 943 | 48 µs | 0.39 | 3.88 |
+| | B | 13.23 | [12.18–13.87] | x1.75 | 72 | 220 | 605 | 245 µs | 1940 | 1941 |
+| | C | 13.76 | [12.43–14.41] | x1.82 | 70 | 188 | 454 | 35 µs | 2.25 | 2.82 |
+| | D | 14.27 | [12.79–14.92] | x1.88 | 45 | 115 | 488 | **44.9 ms** | 232 | 461 |
 
-| Engine | After the prefill | After the full day | vs engine C |
+`book MB` is one book after the 09:30 prefill, `after MB` the same book after the whole day.
+
+Ranking by throughput, best first (`~` = within noise of its neighbour):
+
+| Symbol | Throughput | p99 | p99.9 |
 |---|---|---|---|
-| **A** – `std::map` + `std::list` | 0.39 MB | 3.87 MB | x1.4 |
-| **B** – flat arrays | 1,939.9 MB | 1,940.7 MB | **x688** |
-| **C** – custom structures | 2.25 MB | 2.82 MB | – |
-| **D** – C + flat price levels | 231.7 MB | 460.7 MB | **x163** |
+| AMZN | B ~ C ~ A > D | D > B ~ C ~ A | D ~ B ~ C ~ A |
+| CSCO | D > C > B > A | D > C > B ~ A | D > C > A ~ B |
+| INTC | D > C > B > A | D > C > B > A | D > C > B ~ A |
+| MSFT | D > C > B > A | D > C > B > A | D ~ C > B ~ A |
+| AAPL | D ~ C ~ B > A | D > C ~ B > A | C ~ D ~ B ~ A |
 
-Provisional single-run throughput on the full AAPL day: A 7.9M actions/s (p50 122 ns), B 14.1M
-(p50 69 ns), C 11.9M (p50 72 ns), D 14.3M (p50 43 ns). On the synthetic flows at a comparable book
-size the ranking was D > B > C > A (standard) and D > C > B > A (hard); on real data C and D stay ahead
-of A by a similar margin, but **D pays a 44 ms worst-case action** and B pays 1.9 GB — neither of which
-the synthetic flows ever exposed.
+![Throughput on real ITCH data](results_itch/itch_throughput.png)
 
-### Why real prices cost the flat-array engines so much
+Three things stand out, and all three are about the *tails*, not the typical action:
 
-This is the one place where real data changes the ranking rather than just the numbers, and the cause
-is a handful of orders.
+1. **D has the best p50 on every single symbol** (35–47 ns, against A's 90–148 ns) — indexing price
+   levels by price is still the best idea in the project. It also wins throughput outright on CSCO,
+   INTC and MSFT, by x2.5–x2.8 over A.
+2. **D is nevertheless the *worst* engine on AMZN** (x0.67 of A) and no better than B or C on AAPL —
+   despite the best p50 in both cases. One single action is responsible. See below.
+3. **A, C and D all beat their own synthetic results on the three smaller books** (CSCO, INTC, MSFT:
+   x1.19–x1.70 of their standard-flow throughput). Real flow is in one way *easier* than my synthetic
+   flow: its mix is 47.6% adds, 45.2% plain cancels and 7.2% modifies, with **no market orders at
+   all**, whereas the synthetic mix has 10% modifies and 5% market orders — the two most expensive
+   actions in every engine. They fall behind on AAPL and AMZN, the two biggest books, which are also
+   the two compared against a synthetic book less than half their size. B is the one engine that is
+   below its standard-flow result everywhere (x0.68–x0.94); see the note under the next table.
 
-B and D store price levels in a `std::vector` **indexed by the price itself**: `levels[price - base]`.
-That is one subtraction instead of a walk down a `std::map`, and it is why they win on the synthetic
-flows, where every price sits within $2 (standard) or $50 (hard) of the mid. The array has to span
-every price the book ever touches.
+![Latency percentiles on real ITCH data](results_itch/itch_latency_percentiles.png)
 
-Real books touch absurd prices. Of AAPL's 809,822 priced records, **72 — 0.009% — lie outside $1 to
-$1,000**: a few orders at $0.01 and a few at $199,999.00. (These are real displayed orders; extreme
-limit prices are a normal way to express "fill me at any price".) Those 72 orders force the array to
-span **20 million price levels** instead of the 5,308 actually in use at the end of the day:
+### Real data against the synthetic flows
 
-- **B**'s level is 48 bytes — it holds a whole `std::vector<Order>` plus a head, a live count and a
-  sequence number. 20M levels x 48 bytes x 2 sides = **1.92 GB**, which matches the 1,939.9 MB measured.
-  With my first benchmark harness, which built several hundred identical books to measure the memory of
-  a small one, B simply died with `std::bad_alloc`; the replay now measures a single book.
-- **D**'s level is 12 bytes — just the two ends of an intrusive linked list and a count, because the
-  orders themselves live in a shared node pool. 20M x 12 x 2 = **0.48 GB**, matching the 460.7 MB
-  measured after the full day.
-- **C** keeps its levels in a `std::map`, so it only pays for the 5,308 prices actually in use: 2.8 MB.
+Each symbol is compared with the synthetic book size closest to its peak real book size. That is
+10,000 orders for all five, which is a fair match for INTC (8.6k) and CSCO (13.4k) but understates
+MSFT (23.0k), AAPL (27.1k) and especially AMZN (37.1k) — those three would sit between the synthetic
+10k and 100k rows, so their synthetic comparison is a little flattering.
 
-Growing the array also costs time, not just space. When an order at $0.01 arrives while the array is
-based around $290, the vector has to extend *downwards*, which moves every existing element: D's worst
-single action on the full AAPL day was **44 ms**, against 102 µs for C. The synthetic hard flow, with
-its 10,000-level band, never came close to triggering this.
+| Symbol | Engine | real M/s | synthetic standard | synthetic hard | real vs standard | real vs hard |
+|---|---|---|---|---|---|---|
+| AMZN | A | 6.50 | 6.77 | 7.47 | x0.96 (noise) | x0.87 |
+| | B | 11.93 | 17.51 | 9.08 | x0.68 | x1.31 (noise) |
+| | C | 9.36 | 13.47 | 13.44 | x0.69 | x0.70 |
+| | D | 4.35 | 24.02 | 20.44 | **x0.18** | **x0.21** |
+| CSCO | A | 11.39 | 6.77 | 7.47 | x1.68 | x1.53 |
+| | B | 15.92 | 17.51 | 9.08 | x0.91 | x1.75 |
+| | C | 19.93 | 13.47 | 13.44 | x1.48 | x1.48 |
+| | D | 28.93 | 24.02 | 20.44 | x1.20 | x1.42 |
+| INTC | A | 11.50 | 6.77 | 7.47 | x1.70 | x1.54 |
+| | B | 16.40 | 17.51 | 9.08 | x0.94 | x1.81 |
+| | C | 22.71 | 13.47 | 13.44 | x1.69 | x1.69 |
+| | D | 32.57 | 24.02 | 20.44 | x1.36 | x1.59 |
+| MSFT | A | 10.31 | 6.77 | 7.47 | x1.52 | x1.38 |
+| | B | 14.22 | 17.51 | 9.08 | x0.81 | x1.57 |
+| | C | 18.09 | 13.47 | 13.44 | x1.34 | x1.35 |
+| | D | 28.70 | 24.02 | 20.44 | x1.19 | x1.40 |
+| AAPL | A | 7.57 | 6.77 | 7.47 | x1.12 | x1.01 (noise) |
+| | B | 13.23 | 17.51 | 9.08 | x0.76 | x1.46 |
+| | C | 13.76 | 13.47 | 13.44 | x1.02 (noise) | x1.02 (noise) |
+| | D | 14.27 | 24.02 | 20.44 | x0.59 | x0.70 |
 
-So the honest conclusion from real data is narrower than the synthetic one: indexing price levels by
-price is the single biggest win available (D has the best typical latency on both synthetic and real
-flow), but it is only safe if the price range is bounded. A production engine would need to clamp or
-hash the far-away prices — at which point it is no longer a plain array. This is exactly the kind of
-weakness a self-made order flow cannot reveal, because I chose its price range myself.
+The ranking changes on real data for exactly one engine — D — and in exactly the two cases where it
+hits the stall described below. B also loses its synthetic-flow advantage: it is x1.31–x1.81 of its own
+*hard*-flow result but only x0.68–x0.94 of its *standard*-flow result, on every symbol. That is the
+same lesson as Phase 4: B's standard-flow lead depended on sequential order ids feeding its array
+index, and real ITCH reference numbers run into the tens of millions, so nearly all of them exceed its
+4-million-entry direct array and fall back to the hash map.
 
+![Real ITCH data against the synthetic flows](results_itch/itch_vs_synthetic.png)
 
+### What the $0.01 / $199,999.99 orders are
+
+Both of the effects below are caused by a tiny number of orders at the extreme ends of the price range,
+so it is worth establishing what they actually are. Across all five symbols and the whole session,
+**415 adds** are priced at or below $1 or at or above $100,000 — against 2.1 million adds inside the
+measured windows.
+
+$199,999.99 is not arbitrary: it is **the highest limit price Nasdaq's system accepts**, and the `OUCH`
+specification notes that an order entered above it is treated as a market order instead. So these
+orders sit at the very top and bottom of the permitted range.
+
+Scanning the raw feed for attribution (ITCH publishes attributed orders as `F` messages carrying an
+MPID and unattributed ones as `A`) splits them cleanly in two:
+
+- **19 exactly paired two-sided quotes** — a $0.01 buy and a $199,999.99 sell, 100 shares each —
+  attributed to five market-participant MPIDs (`NITE`, `UBSS`, `NEED`, `VERT`, `DADA`; `NITE` is
+  Knight/Virtu Americas and `UBSS` is UBS Securities, both long-standing Nasdaq liquidity providers).
+  Every one of them arrives **before 09:30**. These match the SEC's own definition of a **stub quote**:
+  "an offer to buy or sell a stock at a price so far away from the prevailing market that it is not
+  intended to be executed, such as an order to buy at a penny or an offer to sell at $100,000" — a
+  placeholder a market maker posts in order to hold a two-sided quote. The SEC approved rules
+  effectively prohibiting stub quotes from 6 December 2010, by requiring market makers to quote within
+  a band of the NBBO; those minimum-quoting requirements apply during *regular market hours*, which is
+  consistent with these surviving only in the pre-open.
+- **The other ~396** are unattributed, almost all on the buy side, and typically **one share** at $0.01
+  or $1.00. They are not market-maker quotes, and the stub-quote label does not fit them.
+
+The orders that matter for the engines are the 19 $199,999.99 **asks**, because those are what stretch
+a price-indexed array upwards, and they all land in the pre-open — which is why every engine's array is
+already stretched before the measured window begins.
+
+### Why D is fastest on three symbols and collapses on two
+
+D keeps a **separate array per side**, each based at `first price seen on that side − 1024 cents`, and
+each has to span every price that side ever touches. A single ask at $199,999.99 therefore stretches
+the ask array to about 20 million levels the moment it arrives. `ListLevel` is 12 bytes, so that is
+229 MiB of array for one side — which is exactly what the `book MB` column shows for D on every symbol.
+
+A stretched array is not in itself slow — reads are still one subtraction. The problem is *growing it
+downwards*. `FlatLevelSet::cover` extends downwards with `levels_.insert(levels_.begin(), extra, …)`,
+which allocates a new buffer and shifts every element. Once the array is 20 million levels long, one
+such insert costs tens of milliseconds, and the freed old buffer is not returned to the OS, so the
+book's footprint roughly doubles.
+
+Whether that ever happens comes down to whether an ask later arrives *below* the base set by the first
+ask of the day — and whether that happens before or after the $199,999.99 order stretched the array:
+
+| Symbol | First ask of the day | Ask array base | First later ask below the base | When | D's worst action |
+|---|---|---|---|---|---|
+| AMZN | $1,879.90 | $1,869.66 | $1,869.42 (by 24¢) | measured flow, action #72,751 | **48.7 ms** |
+| AAPL | $299.90 | $289.66 | $289.47 (by 19¢) | measured flow, action #64 | **44.9 ms** |
+| MSFT | $176.00 | $165.76 | $161.00 | prefill #17 — *before* the stretch, so cheap, and untimed | 33 µs |
+| CSCO | $54.00 | $43.76 | never happens | – | 48 µs |
+| INTC | $60.37 | $50.13 | never happens | – | 27 µs |
+
+So the whole difference is luck about the first quote of the day:
+
+- **CSCO and INTC** opened with an ask ($54.00, $60.37) comfortably above where they traded all day, so
+  the 1024-cent padding was never used up and the array never grew downwards. D is cleanly fastest.
+- **MSFT** did go below its base, but at prefill action 17 — while the array was still tiny, and in the
+  untimed prefill. By the time the $199,999.99 ask stretched it (prefill action 171) the downward move
+  was already done. D is cleanly fastest.
+- **AAPL** opened at $299.90, giving a base of $289.66, and 64 actions into the measured day an
+  ordinary ask arrived at $289.47 — **19 cents too low**. That one action took 44.9 ms: 43% of D's
+  entire 103 ms replay, spent in a single `insert`. AMZN missed by 24 cents and was hit twice: timing
+  each action individually puts its two slowest at roughly 43 ms and 18 ms, together about 55% of its
+  110 ms replay.
+
+Note what the stalling action *is*: not the exotic $199,999.99 order, but a completely ordinary quote
+19 cents below where the stock opened. The extreme order does the damage silently, hours earlier, by
+stretching the array; the bill is paid by whichever innocent order first falls off the bottom.
+
+This is the clearest result of the whole project. D has the best typical latency of any engine on both
+synthetic and real flow, and it is the only engine whose *ranking* real data changes — because a
+price-indexed array makes the cost of an action depend on the range of prices the market has visited,
+not just on the work that action does. C, which keeps its levels in a `std::map`, pays about 70 ns
+instead of 35 ns per action and is never surprised: its worst action on real data is 27–237 µs, up to
+three orders of magnitude better than D's.
+
+### Why B always needs about 1.9 GB
+
+B is uniformly 1,937–1,942 MB on every symbol, where D ranges from 230 to 463 MB. Two differences:
+
+1. **B sizes both sides together.** `FlatBook::cover` keeps a single `basePrice_` and resizes
+   `bidLevels_` *and* `askLevels_` to the same span, so the $0.01 bid and the $199,999.99 ask between
+   them stretch *both* arrays over the full 20-million-cent range. D's per-side arrays mean only the
+   side that actually saw an extreme price pays.
+2. **B's level is four times bigger.** B's `Level` is 48 bytes — it owns a whole `std::vector<Order>`
+   (24 bytes) plus a head index, a live count and a sequence number. D's `ListLevel` is 12 bytes: just
+   the two ends of an intrusive linked list and a count, because the orders themselves live in a shared
+   node pool.
+
+Two arrays of 20 million 48-byte levels is **1,831 MiB**, which is most of the measured 1,940 MiB; the
+remaining ~110 MiB is the spare capacity those vectors keep after growing, the order buffers of the
+levels actually in use, and the order-id index. B also escapes D's stall, for an unglamorous reason:
+because both of its arrays stretch together during the untimed prefill, there is nothing left to grow
+during the measured flow. Its worst actions (90–572 µs) are the batched clean-up of dead slots inside a
+price level, not array growth.
+
+Memory on real data, after the full day:
+
+| Engine | AMZN | CSCO | INTC | MSFT | AAPL |
+|---|---|---|---|---|---|
+| A | 5.12 MB | 1.94 MB | 1.28 MB | 3.22 MB | 3.88 MB |
+| B | 1,942 MB | 1,940 MB | 1,940 MB | 1,940 MB | 1,941 MB |
+| C | 4.12 MB | 1.23 MB | 1.09 MB | 2.34 MB | 2.82 MB |
+| D | 463 MB | 231 MB | 230 MB | 232 MB | 461 MB |
+
+A and C pay only for the price levels actually in use (1,716–5,603 of them). B and D pay for the range,
+whether or not anything is resting in it.
 ## Notes
 
 Built with AI coding assistance. The design decisions and analysis are my own.
