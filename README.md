@@ -9,7 +9,12 @@ behind one interface, and benchmarked to answer one question:
 
 It supports limit and market orders, cancel, modify (cancel + replace), partial fills, price-time
 priority, best bid/ask and spread, market depth, and a timestamped trade history. Prices are integer
-cents. Python is used only to run the benchmarks and draw the charts.
+cents. Python is used only to run the benchmarks, preprocess market data and draw the charts.
+
+The engines are benchmarked on two synthetic order flows and on a real Nasdaq trading day replayed from
+TotalView-ITCH 5.0 data - with the important caveat, explained in
+[Real exchange data (ITCH)](#real-exchange-data-itch), that ITCH is a feed of book events the exchange
+has already matched, so it tests real order-book *update* flow rather than real matching.
 
 ## The four engines
 
@@ -60,6 +65,8 @@ python analysis\plot_results.py    # prints the tables, writes results\*.png
 A single run: `.\build\bench.exe <engine> [bookSize] [actions] [run] [outDir] [standard|hard]`,
 where `<engine>` is one of `A B C1 C2 C3 C4 D`.
 
+To replay real market data instead, see [Real exchange data (ITCH)](#real-exchange-data-itch).
+
 ## Project structure
 
 ```
@@ -70,19 +77,26 @@ FlatBook.hpp/.cpp       engine B
 IntrusiveBook.hpp       engines C2, C3, C (= C4) and D: one template with pluggable index, pool and price levels
 Engines.hpp/.cpp        makeBook("A" | "B" | "C1" | "C2" | "C3" | "C4" | "D")
 OrderFlow.hpp/.cpp      seeded order-flow generator (standard and hard flows)
-tests.cpp               40 tests run against every engine + a differential test
-bench.cpp               benchmark executable (-O3)
+ItchReplay.hpp/.cpp     reader for the real-market action files produced from Nasdaq ITCH data
+tests.cpp               40 tests per engine + a differential test + the real-data replay test
+bench.cpp               benchmark executable (-O3): synthetic flows and ITCH replay
 main.cpp                small demo
-analysis/               run_bench.py, plot_results.py
+analysis/               run_bench.py, plot_results.py                                  (synthetic)
+                        itch_download.py, itch_extract.py, run_itch.py, plot_itch.py   (real data)
 results/                benchmark CSVs and charts
+results_itch/           real-data CSVs and charts
 results_phase3/         earlier baseline-only results
+data/                   the ITCH download and the actions extracted from it (gitignored, 3.5 GB)
 ```
 
 ## Tests
 
 `tests` runs the same 40 assert-based tests against each of the 7 engine variants. A differential test
 then replays six seeded order flows through every engine and checks that each produces the same trades
-and the same final book as engine A.
+and the same final book as engine A. Finally, if the real-market action files are present (see
+[Real exchange data (ITCH)](#real-exchange-data-itch)), the same check runs on a real Nasdaq trading
+day, and also asserts that no engine ever leaves the book crossed. Without that data the last test
+reports that it was skipped and the rest still run.
 
 ## Benchmark method
 
@@ -256,6 +270,166 @@ array dominates and that part is inherent. At a 1M book nothing changes, because
 is holding a million orders. Throughput is unchanged: in interleaved runs every comparison has
 overlapping run ranges (the noise rule), the largest median gap being −8% on the standard flow at 1k,
 where levels empty and refill most often. Every table above was re-measured with the fix in place.
+
+
+## Real exchange data (ITCH)
+
+The synthetic flows above are my own invention, so the obvious objection is that they flatter whichever
+engine happens to suit them. This phase replays a real trading day through the same four engines:
+**30 December 2019 on Nasdaq, from the free TotalView-ITCH 5.0 sample file** (3.5 GB gzipped,
+266 million messages), for five liquid symbols.
+
+### What this tests, and what it does not
+
+**ITCH is a feed of book events Nasdaq has already matched, not the raw order flow that arrived at the
+exchange.** Every message says what *happened* to the order book — an order was added, cancelled,
+deleted, replaced or executed. During continuous trading an Add Order message therefore never crosses
+the book: had the incoming order been executable, Nasdaq would have matched it and published execution
+messages instead.
+
+So this measures the engines on **real order-book update flow** — real order-id patterns, real price
+clustering, real book sizes, a real mix of adds, cancels and executions — and **not on real matching**.
+The matching path is barely touched. Nothing here says how well an engine matches.
+
+That claim is measured, not assumed: across all 4.4 million real actions, every engine produced
+**zero trades** and the book was **never crossed, not once**. See the correctness table below.
+
+### The data
+
+`analysis/itch_extract.py` streams the gzipped file (it is never loaded — ~8.3 GB raw) and converts one
+symbol's messages into the engine's existing actions:
+
+| ITCH message | Engine action |
+|---|---|
+| `A`, `F` — add order (without / with attribution) | add a limit order |
+| `D` — order delete (whole order gone) | cancel |
+| `X` — order cancel (part of an order gone) | modify to the smaller quantity |
+| `E`, `C` — order executed (with / without price) | modify to the smaller quantity, or cancel if nothing is left |
+| `U` — order replace (new price, size and id) | modify to the new price and quantity |
+
+Measured window: **09:30–16:00**, continuous trading only. Before the opening cross the displayed book
+is legitimately *crossed* — buy and sell orders for the 09:30 auction pile up with bids above asks and
+the exchange holds them rather than matching them — so replaying the pre-open would have the engines
+trade orders Nasdaq was still holding. The extractor still tracks the book from 04:00, so it knows
+exactly what was resting at 09:30 and writes that out as a **prefill** block, which the benchmark
+applies untimed before measuring, exactly as it does with the synthetic flows.
+
+| Symbol | ITCH messages = actions | adds | cancels | modifies | 09:30 book | peak book | price span touched |
+|---|---|---|---|---|---|---|---|
+| AAPL | 1,477,252 | 694,517 | 668,258 | 114,477 | 828 | 27,102 | $0.01 – $199,999.00 |
+| MSFT | 1,188,106 | 573,145 | 551,280 | 63,681 | 1,075 | 22,996 | $0.01 – $199,999.99 |
+| INTC | 740,571 | 351,413 | 343,027 | 46,131 | 136 | 8,605 | $0.01 – $199,999.99 |
+| CSCO | 529,009 | 253,867 | 240,855 | 34,287 | 259 | 13,405 | $0.01 – $199,999.99 |
+| AMZN | 477,185 | 227,054 | 191,717 | 58,414 | 1,724 | 37,063 | $0.01 – $199,999.00 |
+
+4,412,123 actions in total. One ITCH message becomes exactly one engine action, so the two counts are
+the same number. Of 266 million messages in the file, only 40 carried a price that was not a whole
+cent (rounded, and counted), and 29 adds had no usable price and were skipped.
+
+Three honest caveats about the mapping:
+
+1. The engine's `modifyOrder` is cancel + re-add, so it sends the order to the **back** of its price
+   level. For `U` (replace) that is exactly right — a real replace loses time priority too. For `X` and
+   `E` it is not: shrinking an order, or partially filling it, keeps its place in the real queue. The
+   engines have no "reduce in place" call and this phase does not change them. The set of resting
+   orders and their quantities stays correct; only the order *within* one price level differs.
+2. `U` gives the order a brand-new ITCH reference number. Rather than emit a cancel and an add, the
+   extractor keeps using the original id inside the engine and remembers that later messages about the
+   new reference mean that same order — so one message stays one action and the book is identical.
+3. `E`, `C` and `X` carry a *delta* (shares executed or cancelled), so the extractor keeps its own copy
+   of each tracked order's resting quantity to turn deltas into the absolute quantity `modifyOrder` wants.
+
+### Getting the data and running it
+
+The data is deliberately not in git (`data/` is gitignored — it is 3.5 GB).
+
+```
+python analysis\itch_download.py     # 3.5 GB; parallel ranged requests, resumable
+python analysis\itch_extract.py      # streams it, writes data\itch\<SYMBOL>.actions
+python analysis\run_itch.py          # 100 runs (5 symbols x 4 engines x 5 runs)
+python analysis\plot_itch.py         # prints the tables, writes results_itch\*.png
+```
+
+A single replay: `.\build\bench.exe replay <engine> <actionFile> [run] [outDir] [maxActions]`.
+Measurement is identical to the synthetic benchmark — same warm-ups, same single measured run per
+process, same 5 interleaved runs, same percentiles, same noise rule — so the two are directly
+comparable. **Engine B needs about 1.9 GB per process on real prices** (see below); D needs about
+0.5 GB.
+
+### Correctness
+
+`tests.exe` replays the real data through **all seven** engine variants and checks that they finish
+identical — same best bid and ask, same depth at every price, same order count, same quantity on every
+individual order id, same trades — and that no engine ever leaves the book crossed.
+
+| Symbol | Actions replayed | Resting at the end | Engines agreeing | Trades from the prefill | Trades during the replay | Times crossed |
+|---|---|---|---|---|---|---|
+| AAPL | 1,000,000 | 22,019 | 7 / 7 | 0 | 0 | 0 |
+| MSFT | 1,000,000 | 19,642 | 7 / 7 | 0 | 0 | 0 |
+| INTC | 740,571 | 8,522 | 7 / 7 | 0 | 0 | 0 |
+| CSCO | 529,009 | 13,271 | 7 / 7 | 0 | 0 | 0 |
+| AMZN | 477,185 | 37,061 | 7 / 7 | 0 | 0 | 0 |
+
+(The test caps a symbol at 1,000,000 actions to stay quick; the benchmark replays the whole day.)
+The zeros in the last three columns are the honesty point, measured: real ITCH adds never cross.
+
+### Results
+
+Run `python analysis\run_itch.py && python analysis\plot_itch.py` to produce the throughput and
+latency tables and the charts in `results_itch/`. The timing numbers in this section are **from single
+exploratory replays of the full AAPL day, not the 5-run medians**, and are here only to show the shape
+of the result; the committed tables come from the full session.
+
+Book memory, however, is deterministic, and it is where real data changes the answer. Full AAPL day,
+one book, measured after the 09:30 prefill and again after the whole day:
+
+| Engine | After the prefill | After the full day | vs engine C |
+|---|---|---|---|
+| **A** – `std::map` + `std::list` | 0.39 MB | 3.87 MB | x1.4 |
+| **B** – flat arrays | 1,939.9 MB | 1,940.7 MB | **x688** |
+| **C** – custom structures | 2.25 MB | 2.82 MB | – |
+| **D** – C + flat price levels | 231.7 MB | 460.7 MB | **x163** |
+
+Provisional single-run throughput on the full AAPL day: A 7.9M actions/s (p50 122 ns), B 14.1M
+(p50 69 ns), C 11.9M (p50 72 ns), D 14.3M (p50 43 ns). On the synthetic flows at a comparable book
+size the ranking was D > B > C > A (standard) and D > C > B > A (hard); on real data C and D stay ahead
+of A by a similar margin, but **D pays a 44 ms worst-case action** and B pays 1.9 GB — neither of which
+the synthetic flows ever exposed.
+
+### Why real prices cost the flat-array engines so much
+
+This is the one place where real data changes the ranking rather than just the numbers, and the cause
+is a handful of orders.
+
+B and D store price levels in a `std::vector` **indexed by the price itself**: `levels[price - base]`.
+That is one subtraction instead of a walk down a `std::map`, and it is why they win on the synthetic
+flows, where every price sits within $2 (standard) or $50 (hard) of the mid. The array has to span
+every price the book ever touches.
+
+Real books touch absurd prices. Of AAPL's 809,822 priced records, **72 — 0.009% — lie outside $1 to
+$1,000**: a few orders at $0.01 and a few at $199,999.00. (These are real displayed orders; extreme
+limit prices are a normal way to express "fill me at any price".) Those 72 orders force the array to
+span **20 million price levels** instead of the 5,308 actually in use at the end of the day:
+
+- **B**'s level is 48 bytes — it holds a whole `std::vector<Order>` plus a head, a live count and a
+  sequence number. 20M levels x 48 bytes x 2 sides = **1.92 GB**, which matches the 1,939.9 MB measured.
+  With my first benchmark harness, which built several hundred identical books to measure the memory of
+  a small one, B simply died with `std::bad_alloc`; the replay now measures a single book.
+- **D**'s level is 12 bytes — just the two ends of an intrusive linked list and a count, because the
+  orders themselves live in a shared node pool. 20M x 12 x 2 = **0.48 GB**, matching the 460.7 MB
+  measured after the full day.
+- **C** keeps its levels in a `std::map`, so it only pays for the 5,308 prices actually in use: 2.8 MB.
+
+Growing the array also costs time, not just space. When an order at $0.01 arrives while the array is
+based around $290, the vector has to extend *downwards*, which moves every existing element: D's worst
+single action on the full AAPL day was **44 ms**, against 102 µs for C. The synthetic hard flow, with
+its 10,000-level band, never came close to triggering this.
+
+So the honest conclusion from real data is narrower than the synthetic one: indexing price levels by
+price is the single biggest win available (D has the best typical latency on both synthetic and real
+flow), but it is only safe if the price range is bounded. A production engine would need to clamp or
+hash the far-away prices — at which point it is no longer a plain array. This is exactly the kind of
+weakness a self-made order flow cannot reveal, because I chose its price range myself.
 
 
 ## Notes

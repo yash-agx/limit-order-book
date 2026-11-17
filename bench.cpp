@@ -1,6 +1,12 @@
 // Benchmark for the order-book engines.
 //
 //   bench.exe <engine> [bookSize] [actions] [run] [outDir] [standard|hard]
+//   bench.exe replay <engine> <actionFile> [run] [outDir] [maxActions]
+//
+// The first form is the synthetic benchmark. The second replays a real day of Nasdaq
+// TotalView-ITCH 5.0 data for one symbol (see ItchReplay.hpp and analysis/itch_extract.py);
+// it uses the same measurement method - the same warm-ups, the same single measured run,
+// the same statistics and the same CSV columns - so the two can be compared directly.
 //
 // Fills a book of the chosen engine with `bookSize` resting orders, then replays `actions`
 // generated actions against it and measures throughput, per-action latency and memory.
@@ -24,6 +30,7 @@
 #endif
 
 #include "Engines.hpp"
+#include "ItchReplay.hpp"
 #include "OrderFlow.hpp"
 
 #include <algorithm>
@@ -35,6 +42,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -164,9 +172,176 @@ std::ofstream openCsv(const std::filesystem::path& path, const char* header) {
     return out;
 }
 
+// ---------- replay of a real day of ITCH data ----------
+
+// Is there a bid at or above the best ask? The engines never allow that: anything that would
+// cross is matched the moment it arrives. Checking it after every action is how the replay
+// demonstrates the honesty point - real ITCH adds, which Nasdaq had already matched before
+// publishing them, never cross the book.
+bool isCrossed(const OrderBookBase& book) {
+    std::optional<Price> bid = book.bestBid(), ask = book.bestAsk();
+    return bid.has_value() && ask.has_value() && *bid >= *ask;
+}
+
+int replayMain(const std::string& engine, const std::string& file, int run,
+               const std::string& outDir, std::size_t maxActions) {
+    ItchFile data;
+    try {
+        data = readItchFile(file, maxActions);
+    } catch (const std::exception& error) {
+        std::printf("ERROR: %s\n", error.what());
+        return 1;
+    }
+    if (data.flow.empty()) {
+        std::printf("ERROR: %s holds no measured actions\n", file.c_str());
+        return 1;
+    }
+
+    // The replay is just another workload: the 09:30 book is the prefill and the rest of the
+    // trading day is the flow, so every measurement function below is the synthetic one.
+    Workload w;
+    w.engine   = engine;
+    w.bookSize = static_cast<std::size_t>(data.peakLive);   // the hint given to reserveOrders
+    w.prefill  = data.prefill;
+    w.flow     = data.flow;
+
+    SetThreadAffinityMask(GetCurrentThread(), 1);
+    SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+    double nsPerTick = calibrateNsPerTick();
+
+    std::vector<int> kind(w.flow.size());
+    for (std::size_t i = 0; i < w.flow.size(); ++i) kind[i] = kindOf(w.flow[i]);
+
+    // ---- memory ----
+    // The synthetic benchmark builds a few hundred identical books and divides, because one
+    // book of 1,000 orders is too small for the OS to report. That trick cannot be used here:
+    // the 09:30 prefill is only a few hundred orders, so it would ask for hundreds of copies,
+    // and an engine whose price levels are an array indexed by price needs gigabytes per copy
+    // on real prices. So measure one book, twice: once as the prefill leaves it, and again
+    // after the whole day has been replayed through it. The first number is approximate for a
+    // small prefill; the second, which is the interesting one, is not.
+    double bookMemoryMb = 0, bookMemoryEndMb = 0;
+    {
+        BookPtr book = makeBook(w.engine);
+        book->reserveTrades(w.flow.size());
+        double before = readMemory().privateMb;
+        book->reserveOrders(w.bookSize + w.bookSize / 8 + 1024);
+        for (const Action& a : w.prefill) apply(*book, a);
+        bookMemoryMb = readMemory().privateMb - before;
+        for (const Action& a : w.flow) apply(*book, a);
+        bookMemoryEndMb = readMemory().privateMb - before;
+    }
+
+    // ---- one untimed replay: the correctness numbers ----
+    // How many trades the prefill caused (the 09:30 snapshot could in principle be crossed)
+    // and how many the measured flow caused (expected: none at all), whether the book was
+    // ever crossed, and a fingerprint of the final state for comparing engines.
+    std::size_t   prefillTrades = 0, flowTrades = 0, priceLevels = 0, resting = 0, crossings = 0;
+    std::uint64_t tradeChecksum = 0;
+    std::optional<Price> finalBid, finalAsk;
+    {
+        BookPtr book = buildBook(w, true);
+        prefillTrades = book->tradeHistory().size();
+        for (const Action& a : w.flow) {
+            apply(*book, a);
+            if (isCrossed(*book)) ++crossings;
+        }
+        flowTrades    = book->tradeHistory().size() - prefillTrades;
+        tradeChecksum = checksum(book->tradeHistory());
+        resting       = countOrders(*book, Side::Buy, &priceLevels) + countOrders(*book, Side::Sell, &priceLevels);
+        finalBid      = book->bestBid();
+        finalAsk      = book->bestAsk();
+    }
+
+    // ---- warm-ups, then the one measured run (as in the synthetic benchmark) ----
+    for (int i = 0; i < kWarmupRuns; ++i) runThroughput(w);
+    double rate = runThroughput(w);
+
+    std::vector<std::uint64_t> ticks(w.flow.size());
+    runLatency(w, ticks);
+
+    std::vector<std::uint64_t>              histogram(12 * kBucketsPerDecade, 0);
+    std::vector<std::vector<std::uint64_t>> ticksByKind(kKinds);
+    double sum = 0;
+    for (std::size_t i = 0; i < ticks.size(); ++i) {
+        double ns = static_cast<double>(ticks[i]) * nsPerTick;
+        sum += ns;
+        int bucket = ns < 1.0 ? 0 : static_cast<int>(std::log10(ns) * kBucketsPerDecade);
+        ++histogram[std::min<std::size_t>(static_cast<std::size_t>(bucket), histogram.size() - 1)];
+        ticksByKind[kind[i]].push_back(ticks[i]);
+    }
+    std::sort(ticks.begin(), ticks.end());
+
+    double avg  = sum / static_cast<double>(ticks.size());
+    double p50  = percentile(ticks, 0.50)  * nsPerTick;
+    double p99  = percentile(ticks, 0.99)  * nsPerTick;
+    double p999 = percentile(ticks, 0.999) * nsPerTick;
+    double max  = static_cast<double>(ticks.back()) * nsPerTick;
+
+    std::printf("itch %-6s %-3s run %d: %10.0f actions/s  avg %6.1f  p50 %6.1f  p99 %7.1f  p99.9 %8.1f  worst %9.0f ns"
+                "  book %8.3f MB, %8.3f MB after  trades %zu/%zu  crossed %zu\n",
+                data.symbol.c_str(), w.engine.c_str(), run, rate, avg, p50, p99, p999, max,
+                bookMemoryMb, bookMemoryEndMb, prefillTrades, flowTrades, crossings);
+
+    // ---- write the CSVs (their own files, so the synthetic results are untouched) ----
+    std::filesystem::create_directories(outDir);
+    std::filesystem::path dir(outDir);
+
+    std::ofstream summary = openCsv(dir / "itch_summary.csv",
+        "symbol,date,engine,run,prefill,actions,messages,adds,cancels,modifies,peak_live,price_span,orders_per_sec,"
+        "avg_ns,p50_ns,p99_ns,p999_ns,max_ns,book_memory_mb,book_memory_end_mb,peak_memory_mb,"
+        "final_book_size,price_levels,prefill_trades,flow_trades,crossings,trade_checksum,best_bid,best_ask");
+    summary << data.symbol << ',' << data.date << ',' << w.engine << ',' << run << ','
+            << w.prefill.size() << ',' << w.flow.size() << ',' << data.messages << ','
+            << data.adds << ',' << data.cancels << ',' << data.modifies << ','
+            << data.peakLive << ',' << data.priceSpan() << ',' << static_cast<std::uint64_t>(rate) << ','
+            << avg << ',' << p50 << ',' << p99 << ',' << p999 << ',' << max << ','
+            << bookMemoryMb << ',' << bookMemoryEndMb << ',' << readMemory().peakMb << ','
+            << resting << ',' << priceLevels << ',' << prefillTrades << ',' << flowTrades << ','
+            << crossings << ',' << tradeChecksum << ','
+            << (finalBid ? *finalBid : 0) << ',' << (finalAsk ? *finalAsk : 0) << '\n';
+
+    std::ofstream byKind = openCsv(dir / "itch_latency_by_type.csv",
+                                   "symbol,engine,run,action,count,avg_ns,p50_ns,p99_ns");
+    for (int k = 0; k < kKinds; ++k) {
+        std::vector<std::uint64_t>& t = ticksByKind[k];
+        if (t.empty()) continue;
+        std::sort(t.begin(), t.end());
+        double kindSum = 0;
+        for (std::uint64_t x : t) kindSum += static_cast<double>(x);
+        byKind << data.symbol << ',' << w.engine << ',' << run << ',' << kKindNames[k] << ',' << t.size() << ','
+               << kindSum * nsPerTick / static_cast<double>(t.size()) << ','
+               << percentile(t, 0.50) * nsPerTick << ',' << percentile(t, 0.99) * nsPerTick << '\n';
+    }
+
+    std::ofstream hist = openCsv(dir / "itch_latency_hist.csv",
+                                 "symbol,engine,run,bucket_lo_ns,bucket_hi_ns,count");
+    for (std::size_t b = 0; b < histogram.size(); ++b) {
+        if (histogram[b] == 0) continue;
+        double lo = std::pow(10.0, static_cast<double>(b) / kBucketsPerDecade);
+        double hi = std::pow(10.0, static_cast<double>(b + 1) / kBucketsPerDecade);
+        hist << data.symbol << ',' << w.engine << ',' << run << ',' << lo << ',' << hi << ',' << histogram[b] << '\n';
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    // bench.exe replay <engine> <actionFile> [run] [outDir] [maxActions]
+    if (argc > 1 && std::string(argv[1]) == "replay") {
+        if (argc < 4 || !makeBook(argv[2])) {
+            std::printf("usage: bench replay <engine> <actionFile> [run] [outDir] [maxActions]\nengines:");
+            for (const std::string& name : engineNames()) std::printf(" %s", name.c_str());
+            std::printf("\n");
+            return 1;
+        }
+        return replayMain(argv[2], argv[3],
+                          argc > 4 ? std::atoi(argv[4]) : 1,
+                          argc > 5 ? argv[5] : "results_itch",
+                          argc > 6 ? std::strtoull(argv[6], nullptr, 10) : 0);
+    }
+
     Workload w;
     w.engine   = argc > 1 ? argv[1] : "A";
     w.bookSize = argc > 2 ? std::strtoull(argv[2], nullptr, 10) : 1000;

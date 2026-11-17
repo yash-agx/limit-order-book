@@ -34,3 +34,6 @@ venv/
 *.log
 
 
+
+# Market data: multi-GB ITCH files and the action files extracted from them
+data/

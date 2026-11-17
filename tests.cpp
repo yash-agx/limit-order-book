@@ -1,11 +1,14 @@
 #include "Engines.hpp"
 #include "FlatBook.hpp"
+#include "ItchReplay.hpp"
 #include "IntrusiveBook.hpp"
 #include "OrderBook.hpp"
 #include "OrderFlow.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <filesystem>
+#include <string>
 #include <unordered_set>
 
 // Every test below runs once for each engine: `Book` is the engine's class.
@@ -592,6 +595,83 @@ void differentialTest(FlowConfig cfg, std::uint64_t seed, std::size_t actions) {
         assert(sameTrades(books[0]->tradeHistory(), books[i]->tradeHistory()));
 }
 
+// ---- Phase 5: replay of real exchange data ----
+// Replay a real day of Nasdaq TotalView-ITCH 5.0 book events (see ItchReplay.hpp) through
+// every engine and check two things:
+//   1. all engines end with exactly the same book - same best bid/ask, same depth, same
+//      order count, same quantity on every individual order id, and the same trades;
+//   2. no engine ever leaves the book crossed.
+//
+// This only runs if the action files exist, because they come from a 3.5 GB download that is
+// deliberately not in git. Without them the test reports that it was skipped.
+// Capped at kItchTestActions actions per symbol so the test stays quick; the benchmark
+// replays the whole day.
+
+const std::size_t kItchTestActions = 1000000;
+
+void itchTest(const std::filesystem::path& path) {
+    ItchFile data = readItchFile(path.string(), kItchTestActions);
+
+    std::unordered_set<OrderId> seen;                  // every order id the replay touches
+    for (const Action& a : data.prefill) seen.insert(a.order.id);
+    for (const Action& a : data.flow)    seen.insert(a.order.id);
+    std::vector<OrderId> ids(seen.begin(), seen.end());
+
+    std::vector<std::unique_ptr<OrderBookBase>> books;
+    std::size_t crossings = 0, prefillTrades = 0, flowTrades = 0;
+    for (const std::string& name : engineNames()) {
+        books.push_back(makeBook(name));
+        assert(books.back());
+        OrderBookBase& book = *books.back();
+
+        for (const Action& a : data.prefill) apply(book, a);
+        prefillTrades = book.tradeHistory().size();
+
+        for (const Action& a : data.flow) {
+            apply(book, a);
+            // Every engine matches anything that crosses the moment it arrives, so a bid at
+            // or above the best ask must never be left resting.
+            std::optional<Price> bid = book.bestBid(), ask = book.bestAsk();
+            if (bid.has_value() && ask.has_value() && *bid >= *ask) ++crossings;
+        }
+        flowTrades = book.tradeHistory().size() - prefillTrades;
+    }
+    assert(crossings == 0);
+
+    for (std::size_t i = 1; i < books.size(); ++i) {
+        assert(sameTrades(books[0]->tradeHistory(), books[i]->tradeHistory()));
+        assert(sameBook(*books[0], *books[i], ids));
+    }
+
+    std::size_t resting = 0;
+    for (Side side : {Side::Buy, Side::Sell})
+        for (const DepthLevel& lvl : books[0]->depth(side, static_cast<std::size_t>(-1)))
+            resting += lvl.orderCount;
+
+    std::printf("  %-6s %9zu actions, %7zu resting at the end, %zu engines agree"
+                "  (trades: %zu from the prefill, %zu from the replay; never crossed)\n",
+                data.symbol.c_str(), data.flow.size(), resting, books.size(), prefillTrades, flowTrades);
+}
+
+void itchTests() {
+    std::filesystem::path dir("data/itch");
+    std::vector<std::filesystem::path> files;
+    if (std::filesystem::is_directory(dir))
+        for (const auto& entry : std::filesystem::directory_iterator(dir))
+            if (entry.path().extension() == ".actions") files.push_back(entry.path());
+    std::sort(files.begin(), files.end());
+
+    if (files.empty()) {
+        std::printf("ITCH replay test SKIPPED: no action files in %s\n"
+                    "  (run: python analysis/itch_download.py && python analysis/itch_extract.py)\n",
+                    dir.string().c_str());
+        return;
+    }
+    std::printf("ITCH replay test (real Nasdaq data, %zu symbol(s)):\n", files.size());
+    for (const std::filesystem::path& file : files) itchTest(file);
+    std::printf("ITCH replay test passed.\n");
+}
+
 int main() {
     engineTests<OrderBook>();
     std::printf("A : all 40 tests passed.\n");
@@ -616,4 +696,6 @@ int main() {
     differentialTest(hardFlow(20000), 2026, 60000);
     std::printf("Differential test passed: %zu engine(s) agree on every trade and on the final book.\n",
                 engineNames().size());
+
+    itchTests();
 }
