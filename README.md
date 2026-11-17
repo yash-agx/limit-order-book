@@ -122,26 +122,26 @@ Median of 5 runs. Throughput is in million actions per second, with the slowest�
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 7.45 (6.88–8.00) | 18.50 (14.47–19.13) | 10.61 (10.24–13.52) | 25.48 (22.33–26.77) |
-| 10k | 6.77 (6.42–6.95) | 17.51 (17.09–19.63) | 13.47 (12.33–13.99) | 24.02 (14.98–24.70) |
-| 100k | 4.56 (3.84–4.87) | 14.27 (9.28–15.89) | 11.19 (9.65–12.06) | 18.06 (14.08–18.87) |
-| 1M | 2.44 (2.38–2.46) | 8.77 (8.40–8.91) | 5.78 (5.43–5.87) | 6.84 (6.72–6.90) |
+| 1k | 6.77 (5.86–6.87) | 19.64 (19.15–19.71) | 13.80 (13.79–13.92) | 25.86 (19.48–26.64) |
+| 10k | 7.13 (6.99–7.34) | 19.02 (17.82–19.77) | 13.99 (13.25–14.07) | 24.49 (23.82–24.59) |
+| 100k | 4.83 (4.82–4.88) | 15.00 (14.64–15.75) | 11.67 (11.46–11.93) | 17.83 (17.47–18.39) |
+| 1M | 2.60 (2.59–2.70) | 9.09 (8.79–9.58) | 5.61 (5.13–6.20) | 7.14 (6.36–7.27) |
 
-Ranking by throughput: D > B > C > A at 1k; D ~ B > C > A at 10k; D ~ B ~ C > A at 100k (the run
-ranges overlap, so B and C cannot be separated there); B > D > C > A at 1M.
+Ranking by throughput: D ~ B > C > A at 1k (their run ranges overlap); D > B > C > A at 10k and 100k;
+B > D > C > A at 1M, where B's flat `std::vector` queues and sequential-id array index win out.
 
 ### Throughput – hard flow
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 8.46 (8.04–8.59) | 11.51 (11.21–11.66) | 16.61 (16.41–16.91) | 24.93 (24.55–25.37) |
-| 10k | 7.47 (7.29–7.54) | 9.08 (8.88–9.27) | 13.44 (12.83–13.53) | 20.44 (20.35–20.73) |
-| 100k | 3.86 (3.70–4.32) | 6.04 (5.92–6.53) | 10.56 (9.92–11.00) | 15.59 (13.87–15.83) |
-| 1M | 1.89 (1.77–1.93) | 2.58 (2.32–2.60) | 5.78 (5.50–5.91) | 6.84 (5.64–6.99) |
+| 1k | 8.02 (7.05–8.59) | 11.53 (11.38–11.56) | 16.50 (15.75–16.76) | 24.58 (24.39–25.15) |
+| 10k | 7.38 (7.12–7.58) | 9.22 (8.82–9.41) | 13.54 (12.53–13.62) | 19.89 (19.71–20.41) |
+| 100k | 4.42 (4.34–4.48) | 6.61 (6.50–6.64) | 10.52 (10.19–10.56) | 15.02 (12.34–15.24) |
+| 1M | 1.94 (1.85–1.96) | 2.59 (2.48–2.63) | 5.89 (5.73–5.93) | 6.89 (6.25–6.94) |
 
-Ranking by throughput: D > C > B > A at 1k, 10k and 100k; D ~ C > B > A at 1M. B's lead over A falls
-from x2.5–x3.6 on the standard flow to x1.2–x1.6 here, so most of it depended on sequential order ids
-and a narrow price band. D never gives up more than 15% of its standard-flow throughput.
+Ranking by throughput: D > C > B > A at every size. B's lead over A falls from x2.7–x3.5 on the
+standard flow to x1.25–x1.5 here, so most of it depended on sequential order ids and a narrow price
+band. D gives up at most 19% of its own standard-flow throughput (at 10k; 4–5% at 1k and 1M).
 
 ![Throughput by engine on both order flows](results/throughput_vs_book_size.png)
 
@@ -151,24 +151,25 @@ Standard flow:
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 118 / 350 / 1129 | 42 / 207 / 443 | 66 / 261 / 477 | 37 / 177 / 297 |
-| 10k | 138 / 396 / 2111 | 40 / 219 / 656 | 67 / 250 / 450 | 42 / 197 / 314 |
-| 100k | 202 / 583 / 4205 | 43 / 264 / 4217 | 83 / 281 / 588 | 55 / 223 / 355 |
-| 1M | 397 / 1125 / 5398 | 43 / 412 / 2688 | 186 / 514 / 3995 | 130 / 476 / 957 |
+| 1k | 141 / 382 / 655 | 41 / 189 / 329 | 64 / 251 / 395 | 36 / 184 / 300 |
+| 10k | 131 / 366 / 676 | 40 / 212 / 616 | 67 / 252 / 435 | 43 / 202 / 320 |
+| 100k | 194 / 517 / 1475 | 41 / 222 / 3390 | 83 / 270 / 444 | 57 / 235 / 432 |
+| 1M | 378 / 1065 / 4707 | 41 / 398 / 1054 | 172 / 491 / 731 | 129 / 468 / 727 |
 
 Hard flow:
 
 | Resting orders | A | B | C | D |
 |---|---|---|---|---|
-| 1k | 110 / 320 / 569 | 80 / 341 / 1066 | 54 / 207 / 330 | 40 / 173 / 265 |
-| 10k | 126 / 356 / 1535 | 94 / 354 / 5318 | 65 / 254 / 466 | 45 / 206 / 337 |
-| 100k | 224 / 649 / 4532 | 139 / 521 / 3779 | 86 / 324 / 920 | 62 / 250 / 468 |
-| 1M | 510 / 1413 / 4409 | 374 / 1289 / 3572 | 184 / 565 / 3719 | 137 / 519 / 800 |
+| 1k | 118 / 334 / 575 | 79 / 329 / 958 | 54 / 206 / 341 | 41 / 179 / 275 |
+| 10k | 135 / 351 / 749 | 94 / 349 / 4661 | 65 / 255 / 503 | 45 / 208 / 317 |
+| 100k | 213 / 554 / 1235 | 135 / 459 / 1336 | 84 / 314 / 460 | 64 / 250 / 432 |
+| 1M | 505 / 1387 / 2755 | 371 / 1280 / 3157 | 174 / 543 / 795 | 139 / 527 / 795 |
 
-D has the best or joint-best p99.9 at every size on both flows. B's is the worst of the four at 100k
-on the standard flow (4217 ns, no better than A's) and at 10k on the hard flow (5318 ns, worse than
-A's): its lazily-removed dead slots have to be cleaned up eventually, and the clean-up all lands on
-one unlucky action.
+D has the best or joint-best p99.9 at every size on both flows (727 ns against C's 731 at a 1M book on
+the standard flow; 795 ns, level with C, on the hard flow). B's is the worst of the four at 100k on the
+standard flow (3390 ns, over twice A's 1475) and at 10k on the hard flow (4661 ns, six times A's 749):
+its lazily-removed dead slots have to be cleaned up eventually, and the clean-up all lands on one
+unlucky action.
 
 Each timing includes about 6 ns of measurement overhead.
 
@@ -183,14 +184,17 @@ step; "noise" means the run ranges overlap.
 
 | Resting orders | A | + pool | + intrusive list | + hash map | + layout (= C) | + flat levels (= D) |
 |---|---|---|---|---|---|---|
-| 1k | 7.45 | 6.20 (noise) | 7.69 (noise) | 12.84 (+67%) | 10.61 (noise) | 25.48 (+140%) |
-| 10k | 6.77 | 6.07 (−10%) | 6.99 (+15%) | 13.25 (+90%) | 13.47 (noise) | 24.02 (+78%) |
-| 100k | 4.56 | 3.79 (noise) | 5.56 (+47%) | 11.14 (+100%) | 11.19 (noise) | 18.06 (+61%) |
-| 1M | 2.44 | 2.72 (+12%) | 3.29 (+21%) | 5.57 (+70%) | 5.78 (noise) | 6.84 (+18%) |
+| 1k | 6.77 | 8.59 (+27%) | 9.41 (+9%) | 13.47 (+43%) | 13.80 (+2%) | 25.86 (+87%) |
+| 10k | 7.13 | 7.12 (noise) | 8.22 (+15%) | 13.85 (+69%) | 13.99 (noise) | 24.49 (+75%) |
+| 100k | 4.83 | 4.93 (noise) | 6.34 (+29%) | 11.48 (+81%) | 11.67 (noise) | 17.83 (+53%) |
+| 1M | 2.60 | 3.09 (+19%) | 3.70 (+20%) | 6.00 (+62%) | 5.61 (noise) | 7.14 (+27%) |
 
-The memory pool — the change I expected to matter most after Phase 3 — is the only step that never
-clearly helps: noise at 1k and 100k, −10% at 10k, +12% at 1M. Replacing the hash map is the biggest
-single win, and replacing `std::map` with a flat array of price levels is bigger still.
+The memory pool — the change I expected to matter most after Phase 3 — is the step that refuses to
+settle down: +27% at 1k and +19% at 1M here, within noise at 10k and 100k, and in two earlier sessions
+anywhere from −10% to within noise at every size. Three sessions have not agreed on it, so the honest
+conclusion is that it is worth less than the noise of my setup. The two reproducible wins are the
+open-addressing hash map (+43–81% in every session) and the flat array of price levels (+27–87%); the
+compact node layout is within noise except for a borderline +2% at 1k.
 
 ![Ablation from A to C to D](results/ablation_throughput.png)
 
@@ -202,17 +206,19 @@ the 1k book are approximate.
 
 | Resting orders | Flow | A | B | C | D |
 |---|---|---|---|---|---|
-| 1k | standard | 0.15 → 0.00 | 0.27 → 14.21 | 0.24 → 0.21 | 0.25 → 0.25 |
-| 10k | standard | 1.19 → 1.23 | 0.96 → 17.23 | 0.93 → 1.17 | 0.95 → 1.00 |
-| 100k | standard | 11.47 → 12.16 | 8.06 → 28.71 | 7.98 → 8.39 | 8.46 → 8.43 |
-| 1M | standard | 122.48 → 121.09 | 89.66 → 120.48 | 107.19 → 107.20 | 107.23 → 107.24 |
-| 1k | hard | 0.14 → 0.23 | 1.33 → 1.59 | 0.22 → 0.21 | 0.36 → 0.35 |
-| 10k | hard | 1.27 → 1.10 | 2.34 → 4.25 | 0.95 → 1.43 | 1.09 → 1.05 |
-| 100k | hard | 12.34 → 12.64 | 13.90 → 21.17 | 8.89 → 9.14 | 8.63 → 8.60 |
-| 1M | hard | 123.16 → 121.81 | 121.00 → 144.32 | 108.22 → 108.12 | 107.32 → 107.50 |
+| 1k | standard | 0.15 → 0.07 | 0.27 → 14.21 | 0.24 → 0.22 | 0.25 → 0.27 |
+| 10k | standard | 1.17 → 1.23 | 0.94 → 17.22 | 0.92 → 1.17 | 0.94 → 1.00 |
+| 100k | standard | 12.26 → 12.16 | 8.86 → 28.64 | 8.66 → 8.71 | 8.71 → 8.75 |
+| 1M | standard | 122.29 → 121.05 | 89.51 → 120.42 | 107.19 → 107.20 | 107.23 → 107.26 |
+| 1k | hard | 0.14 → 0.09 | 1.33 → 1.51 | 0.22 → 0.20 | 0.40 → 0.39 |
+| 10k | hard | 1.27 → 1.23 | 2.34 → 4.23 | 1.02 → 1.43 | 1.18 → 1.17 |
+| 100k | hard | 12.27 → 12.64 | 13.59 → 21.27 | 8.79 → 8.75 | 8.62 → 8.88 |
+| 1M | hard | 123.16 → 122.01 | 120.63 → 144.17 | 108.24 → 108.11 | 107.45 → 107.44 |
 
 A, C and D stay flat, as they should: the book holds the same number of orders at both points. B is
-the exception, and the next section explains why.
+the exception, and the next section explains why. D's price window (at most 65,536 levels, 786 KB per
+side) never shows up here, because both synthetic flows span few enough prices to sit inside one
+window — the window only earns its keep on real data.
 
 ![Book memory after the flow](results/memory_after_flow.png)
 
@@ -375,8 +381,10 @@ The zeros in the last three columns are the honesty point, measured: real ITCH a
 
 ### Results
 
-*These are engine D before the far-away-price fix (see "Fixing D: a price window plus a side
-map"). A, B and C are unaffected by it.*
+*These numbers are the session after engine D's far-away-price fix (see "Fixing D: a price window
+plus a side map"). D's pre-fix numbers, and what changed, are in that section; A, B and C are
+unaffected by the fix, and the whole suite was re-run in one session so every engine here is
+directly comparable.*
 
 100 runs: 5 symbols x 4 engines x 5 runs, each a fresh process, interleaved. Median of the 5 runs,
 with the slowest–fastest run in brackets. Every run finished with all four engines on an identical
@@ -384,26 +392,26 @@ book, and the book was never crossed.
 
 | Symbol | Engine | M actions/s | [spread] | vs A | p50 ns | p99 ns | p99.9 ns | worst | book MB | after MB |
 |---|---|---|---|---|---|---|---|---|---|---|
-| AMZN (477k actions) | A | 6.50 | [6.36–6.54] | – | 148 | 348 | 2326 | 60 µs | 0.60 | 5.12 |
-| | B | 11.93 | [7.50–12.81] | x1.83 | 80 | 260 | 1050 | 185 µs | 1938 | 1942 |
-| | C | 9.36 | [5.87–9.42] | x1.44 (noise) | 107 | 265 | 2085 | 237 µs | 3.69 | 4.12 |
-| | D | **4.35** | [3.57–4.51] | **x0.67** | 47 | 196 | 661 | **48.7 ms** | 236 | 463 |
-| CSCO (529k) | A | 11.39 | [9.95–11.46] | – | 91 | 201 | 303 | 45 µs | 0.16 | 1.94 |
-| | B | 15.92 | [15.00–16.03] | x1.40 | 64 | 200 | 455 | 572 µs | 1937 | 1940 |
-| | C | 19.93 | [19.50–20.39] | x1.75 | 51 | 140 | 234 | 27 µs | 1.13 | 1.23 |
-| | D | **28.93** | [26.25–29.34] | **x2.54** | 39 | 97 | 186 | 48 µs | 231 | 231 |
-| INTC (741k) | A | 11.50 | [11.28–11.66] | – | 90 | 203 | 382 | 31 µs | 0.11 | 1.28 |
-| | B | 16.40 | [15.62–16.47] | x1.43 | 65 | 188 | 357 | 90 µs | 1939 | 1940 |
-| | C | 22.71 | [21.13–22.84] | x1.98 | 46 | 136 | 238 | 28 µs | 0.92 | 1.09 |
-| | D | **32.57** | [32.35–33.16] | **x2.83** | 35 | 78 | 140 | 27 µs | 230 | 230 |
-| MSFT (1.19M) | A | 10.31 | [10.13–10.34] | – | 98 | 233 | 428 | 56 µs | 0.38 | 3.22 |
-| | B | 14.22 | [13.71–15.38] | x1.38 | 69 | 195 | 371 | 335 µs | 1937 | 1940 |
-| | C | 18.09 | [18.00–18.24] | x1.76 | 57 | 154 | 263 | 32 µs | 2.07 | 2.34 |
-| | D | **28.70** | [27.99–28.87] | **x2.79** | 39 | 103 | 240 | 33 µs | 232 | 232 |
-| AAPL (1.48M) | A | 7.57 | [7.46–8.13] | – | 124 | 303 | 943 | 48 µs | 0.39 | 3.88 |
-| | B | 13.23 | [12.18–13.87] | x1.75 | 72 | 220 | 605 | 245 µs | 1940 | 1941 |
-| | C | 13.76 | [12.43–14.41] | x1.82 | 70 | 188 | 454 | 35 µs | 2.25 | 2.82 |
-| | D | 14.27 | [12.79–14.92] | x1.88 | 45 | 115 | 488 | **44.9 ms** | 232 | 461 |
+| AMZN (477k actions) | A | 6.99 | [6.91–7.04] | – | 142 | 312 | 1302 | 53 µs | 0.60 | 5.12 |
+| | B | 13.18 | [12.40–13.34] | x1.89 | 79 | 262 | 688 | 226 µs | 1938 | 1942 |
+| | C | 9.92 | [9.90–10.04] | x1.42 | 103 | 240 | 438 | 28 µs | 3.69 | 4.12 |
+| | D | **16.51** | [16.24–16.99] | **x2.36** | 47 | 127 | 414 | 233 µs | 6.05 | 6.05 |
+| CSCO (529k) | A | 11.58 | [11.43–11.71] | – | 92 | 208 | 331 | 38 µs | 0.16 | 1.93 |
+| | B | 15.93 | [15.70–16.12] | x1.37 | 64 | 201 | 474 | 568 µs | 1937 | 1940 |
+| | C | 19.89 | [19.69–20.14] | x1.72 | 52 | 144 | 254 | 28 µs | 1.12 | 1.23 |
+| | D | **27.82** | [24.59–28.11] | **x2.40** | 39 | 101 | 169 | 81 µs | 1.36 | 1.60 |
+| INTC (741k) | A | 11.44 | [10.40–11.62] | – | 92 | 211 | 322 | 50 µs | 0.11 | 1.28 |
+| | B | 16.18 | [14.09–16.34] | x1.41 | 65 | 200 | 437 | 133 µs | 1939 | 1940 |
+| | C | 22.33 | [20.52–22.63] | x1.95 | 46 | 140 | 260 | 32 µs | 0.92 | 1.09 |
+| | D | **31.01** | [29.47–31.22] | **x2.71** | 36 | 84 | 174 | 183 µs | 1.25 | 1.79 |
+| MSFT (1.19M) | A | 10.28 | [9.80–10.32] | – | 99 | 234 | 432 | 46 µs | 0.37 | 3.24 |
+| | B | 15.02 | [14.89–15.06] | x1.46 | 69 | 196 | 370 | 346 µs | 1937 | 1940 |
+| | C | 18.09 | [18.03–18.33] | x1.76 | 58 | 157 | 276 | 38 µs | 2.07 | 2.34 |
+| | D | **27.92** | [25.58–28.36] | **x2.72** | 40 | 101 | 177 | 179 µs | 2.59 | 3.37 |
+| AAPL (1.48M) | A | 8.19 | [8.13–8.36] | – | 120 | 290 | 669 | 154 µs | 0.38 | 3.87 |
+| | B | 14.04 | [13.88–14.18] | x1.72 | 71 | 206 | 415 | 257 µs | 1940 | 1941 |
+| | C | 14.38 | [14.27–14.56] | x1.76 | 69 | 185 | 367 | 63 µs | 2.25 | 2.82 |
+| | D | **25.78** | [20.21–25.87] | **x3.15** | 44 | 105 | 189 | 79 µs | 3.36 | 3.36 |
 
 `book MB` is one book after the 09:30 prefill, `after MB` the same book after the whole day.
 
@@ -411,28 +419,36 @@ Ranking by throughput, best first (`~` = within noise of its neighbour):
 
 | Symbol | Throughput | p99 | p99.9 |
 |---|---|---|---|
-| AMZN | B ~ C ~ A > D | D > B ~ C ~ A | D ~ B ~ C ~ A |
-| CSCO | D > C > B > A | D > C > B ~ A | D > C > A ~ B |
-| INTC | D > C > B > A | D > C > B > A | D > C > B ~ A |
-| MSFT | D > C > B > A | D > C > B > A | D ~ C > B ~ A |
-| AAPL | D ~ C ~ B > A | D > C ~ B > A | C ~ D ~ B ~ A |
+| AMZN | D > B > C > A | D > C > B ~ A | D ~ C ~ B ~ A |
+| CSCO | D > C > B > A | D > C > B > A | D ~ C ~ A ~ B |
+| INTC | D > C > B > A | D > C > B ~ A | D ~ C ~ A ~ B |
+| MSFT | D > C > B > A | D > C ~ B ~ A | D > C ~ B ~ A |
+| AAPL | D > C > B > A | D > C > B > A | D ~ C > B ~ A |
 
 ![Throughput on real ITCH data](results_itch/itch_throughput.png)
 
-Three things stand out, and all three are about the *tails*, not the typical action:
+Four things stand out:
 
-1. **D has the best p50 on every single symbol** (35–47 ns, against A's 90–148 ns) — indexing price
-   levels by price is still the best idea in the project. It also wins throughput outright on CSCO,
-   INTC and MSFT, by x2.5–x2.8 over A.
-2. **D is nevertheless the *worst* engine on AMZN** (x0.67 of A) and no better than B or C on AAPL —
-   despite the best p50 in both cases. One single action is responsible. See below.
-3. **A, C and D all beat their own synthetic results on the three smaller books** (CSCO, INTC, MSFT:
-   x1.19–x1.70 of their standard-flow throughput). Real flow is in one way *easier* than my synthetic
+1. **D wins on every symbol now** — throughput x2.36–x3.15 of A, the best p50 (36–47 ns against A's
+   92–142 ns) and the best p99 of the four everywhere. Indexing price levels by price is the single
+   best idea in the project, and with the window fix there is no longer a symbol where it backfires.
+2. **The two collapses are gone.** AMZN went from x0.67 of A to x2.36 and AAPL from x1.88 to x3.15;
+   D's worst single action went from 48.7 ms to 233 µs on AMZN and from 44.9 ms to 79 µs on AAPL; and
+   its memory after a full day went from 463 MB to 6.05 MB (AMZN) and 461 MB to 3.36 MB (AAPL). D now
+   sits with A and C at 1.25–6.05 MB instead of with B at nearly 2 GB. The before picture is in "Why D
+   used to collapse on two symbols" below, the fix in the section after it.
+3. **The tail is still D's weakest column.** Its worst action, 79–233 µs, is the worst or
+   second-worst of the four engines on four of the five symbols, against C's steady 28–63 µs. Nothing in that
+   range shows up before the p99.9 (which D wins or ties everywhere), so it is a handful of actions
+   per run; the likely cause is the window being rebuilt — allocating and filling a fresh array of up
+   to 65,536 levels — but I have not confirmed that by timing individual actions.
+4. **A, C and D all beat their own synthetic results on the three smaller books** (CSCO, INTC, MSFT:
+   x1.14–x1.62 of their standard-flow throughput). Real flow is in one way *easier* than my synthetic
    flow: its mix is 47.6% adds, 45.2% plain cancels and 7.2% modifies, with **no market orders at
    all**, whereas the synthetic mix has 10% modifies and 5% market orders — the two most expensive
-   actions in every engine. They fall behind on AAPL and AMZN, the two biggest books, which are also
-   the two compared against a synthetic book less than half their size. B is the one engine that is
-   below its standard-flow result everywhere (x0.68–x0.94); see the note under the next table.
+   actions in every engine. They fall behind on AMZN, the biggest book, compared against a synthetic
+   book less than a third of its size. B is the one engine that is below its standard-flow result
+   everywhere (x0.69–x0.85); see the note under the next table.
 
 ![Latency percentiles on real ITCH data](results_itch/itch_latency_percentiles.png)
 
@@ -445,33 +461,35 @@ MSFT (23.0k), AAPL (27.1k) and especially AMZN (37.1k) — those three would sit
 
 | Symbol | Engine | real M/s | synthetic standard | synthetic hard | real vs standard | real vs hard |
 |---|---|---|---|---|---|---|
-| AMZN | A | 6.50 | 6.77 | 7.47 | x0.96 (noise) | x0.87 |
-| | B | 11.93 | 17.51 | 9.08 | x0.68 | x1.31 (noise) |
-| | C | 9.36 | 13.47 | 13.44 | x0.69 | x0.70 |
-| | D | 4.35 | 24.02 | 20.44 | **x0.18** | **x0.21** |
-| CSCO | A | 11.39 | 6.77 | 7.47 | x1.68 | x1.53 |
-| | B | 15.92 | 17.51 | 9.08 | x0.91 | x1.75 |
-| | C | 19.93 | 13.47 | 13.44 | x1.48 | x1.48 |
-| | D | 28.93 | 24.02 | 20.44 | x1.20 | x1.42 |
-| INTC | A | 11.50 | 6.77 | 7.47 | x1.70 | x1.54 |
-| | B | 16.40 | 17.51 | 9.08 | x0.94 | x1.81 |
-| | C | 22.71 | 13.47 | 13.44 | x1.69 | x1.69 |
-| | D | 32.57 | 24.02 | 20.44 | x1.36 | x1.59 |
-| MSFT | A | 10.31 | 6.77 | 7.47 | x1.52 | x1.38 |
-| | B | 14.22 | 17.51 | 9.08 | x0.81 | x1.57 |
-| | C | 18.09 | 13.47 | 13.44 | x1.34 | x1.35 |
-| | D | 28.70 | 24.02 | 20.44 | x1.19 | x1.40 |
-| AAPL | A | 7.57 | 6.77 | 7.47 | x1.12 | x1.01 (noise) |
-| | B | 13.23 | 17.51 | 9.08 | x0.76 | x1.46 |
-| | C | 13.76 | 13.47 | 13.44 | x1.02 (noise) | x1.02 (noise) |
-| | D | 14.27 | 24.02 | 20.44 | x0.59 | x0.70 |
+| AMZN | A | 6.99 | 7.13 | 7.38 | x0.98 (noise) | x0.95 |
+| | B | 13.18 | 19.02 | 9.22 | x0.69 | x1.43 |
+| | C | 9.92 | 13.99 | 13.54 | x0.71 | x0.73 |
+| | D | 16.51 | 24.49 | 19.89 | x0.67 | x0.83 |
+| CSCO | A | 11.58 | 7.13 | 7.38 | x1.62 | x1.57 |
+| | B | 15.93 | 19.02 | 9.22 | x0.84 | x1.73 |
+| | C | 19.89 | 13.99 | 13.54 | x1.42 | x1.47 |
+| | D | 27.82 | 24.49 | 19.89 | x1.14 (noise) | x1.40 |
+| INTC | A | 11.44 | 7.13 | 7.38 | x1.60 | x1.55 |
+| | B | 16.18 | 19.02 | 9.22 | x0.85 | x1.75 |
+| | C | 22.33 | 13.99 | 13.54 | x1.60 | x1.65 |
+| | D | 31.01 | 24.49 | 19.89 | x1.27 | x1.56 |
+| MSFT | A | 10.28 | 7.13 | 7.38 | x1.44 | x1.39 |
+| | B | 15.02 | 19.02 | 9.22 | x0.79 | x1.63 |
+| | C | 18.09 | 13.99 | 13.54 | x1.29 | x1.34 |
+| | D | 27.92 | 24.49 | 19.89 | x1.14 | x1.40 |
+| AAPL | A | 8.19 | 7.13 | 7.38 | x1.15 | x1.11 |
+| | B | 14.04 | 19.02 | 9.22 | x0.74 | x1.52 |
+| | C | 14.38 | 13.99 | 13.54 | x1.03 | x1.06 |
+| | D | 25.78 | 24.49 | 19.89 | x1.05 (noise) | x1.30 (noise) |
 
-The ranking changes on real data for exactly one engine — D — and in exactly the two cases where it
-hits the stall described below. B also loses its synthetic-flow advantage: it is x1.31–x1.81 of its own
-*hard*-flow result but only x0.68–x0.94 of its *standard*-flow result, on every symbol. That is the
-same lesson as Phase 4: B's standard-flow lead depended on sequential order ids feeding its array
+With D fixed, the only engine whose *ranking* real data still changes is B: real flow puts C above B on
+four of the five symbols, where the synthetic standard flow at 10,000 orders puts B above C. That is
+the same lesson as Phase 4 — B's standard-flow lead depended on sequential order ids feeding its array
 index, and real ITCH reference numbers run into the tens of millions, so nearly all of them exceed its
-4-million-entry direct array and fall back to the hash map.
+4-million-entry direct array and fall back to the hash map. It shows up directly in the ratios: B is
+x1.43–x1.75 of its own *hard*-flow result but only x0.69–x0.85 of its *standard*-flow result, on every
+symbol. D's x0.67 on AMZN is the book-size caveat above, not a structural problem: AMZN's real book
+peaks at 37,000 orders against the 10,000-order synthetic row it is compared with.
 
 ![Real ITCH data against the synthetic flows](results_itch/itch_vs_synthetic.png)
 
@@ -506,10 +524,10 @@ The orders that matter for the engines are the 19 $199,999.99 **asks**, because 
 a price-indexed array upwards, and they all land in the pre-open — which is why every engine's array is
 already stretched before the measured window begins.
 
-### Why D is fastest on three symbols and collapses on two
+### Why D used to collapse on two symbols
 
-This section describes D as it was first written. The problem it diagnoses is fixed in
-"Fixing D: a price window plus a side map" below; everything here is the *before* picture.
+This section is the *before* picture: it describes D as first written, and the numbers in it come from
+the earlier benchmark session, not from the results table above. The fix is the section after next.
 
 D keeps a **separate array per side**, each based at `first price seen on that side − 1024 cents`, and
 each has to span every price that side ever touches. A single ask at $199,999.99 therefore stretches
@@ -550,12 +568,12 @@ Note what the stalling action *is*: not the exotic $199,999.99 order, but a comp
 19 cents below where the stock opened. The extreme order does the damage silently, hours earlier, by
 stretching the array; the bill is paid by whichever innocent order first falls off the bottom.
 
-This is the clearest result of the whole project. D has the best typical latency of any engine on both
-synthetic and real flow, and it is the only engine whose *ranking* real data changes — because a
-price-indexed array makes the cost of an action depend on the range of prices the market has visited,
-not just on the work that action does. C, which keeps its levels in a `std::map`, pays about 70 ns
-instead of 35 ns per action and is never surprised: its worst action on real data is 27–237 µs, up to
-three orders of magnitude better than D's.
+This was the clearest result of the whole project, and the lesson survives the fix: a price-indexed
+array makes the cost of an action depend on **the range of prices the market has visited**, not just on
+the work that action does — and real data visits a far wider range than any price distribution I would
+have invented. C, which keeps its levels in a `std::map`, paid about 70 ns instead of 35 ns per action
+and was never surprised: its worst action was 27–237 µs, up to three orders of magnitude better than
+D's 48.7 ms. The point of the next section is to keep D's 35 ns and bound its worst case too.
 
 ### Fixing D: a price window plus a side map
 
@@ -585,9 +603,10 @@ The fix bounds the array instead of stretching it, and leaves the fast path exac
   that now fits is pulled in. If that didn't help — the far levels really are junk hundreds of dollars
   away — the threshold doubles, so a useless recentre can never happen once per order.
 
-What it costs: one extra bounds check per level lookup, a `far_.empty()` check in `bestPrice()`, and
-levels inside a 65,536-price window only. Everything the synthetic flows do stays on the fast path
-(the hard flow spans 10,000 price levels, well inside one window), so their numbers should not move.
+What it costs: one extra bounds check per level lookup, a `far_.empty()` check in `bestPrice()`, and a
+level more than $655 from the rest of the book landing in a `std::map` instead of an array. Everything
+the synthetic flows do stays on the fast path (the hard flow spans 10,000 price levels, comfortably
+inside one window), and their numbers did not move — see the second table below.
 
 B is deliberately left alone: its 1.9 GB (next section) is the same family of problem, and keeping it
 unfixed keeps the contrast in the write-up.
@@ -601,32 +620,47 @@ and still passes: all 7 engines finish on an identical book and the book is neve
 
 #### Before and after
 
-Fill in from a fresh 100-run session (`python analysis\run_itch.py && python analysis\plot_itch.py`).
-"Before" is the 100-run session in the table above.
+Engine D only, 5 runs per symbol in each session, median. "Before" is the earlier 100-run session, the
+one quoted in "Why D used to collapse on two symbols"; "after" is the session in the results table at
+the top of this chapter.
 
 | Symbol | M actions/s before | after | D's worst action before | after | book MB after the day, before | after |
 |---|---|---|---|---|---|---|
-| AMZN | 4.35 | _TBD_ | 48.7 ms | _TBD_ | 463 | _TBD_ |
-| CSCO | 28.93 | _TBD_ | 48 µs | _TBD_ | 231 | _TBD_ |
-| INTC | 32.57 | _TBD_ | 27 µs | _TBD_ | 230 | _TBD_ |
-| MSFT | 28.70 | _TBD_ | 33 µs | _TBD_ | 232 | _TBD_ |
-| AAPL | 14.27 | _TBD_ | 44.9 ms | _TBD_ | 461 | _TBD_ |
+| AMZN | 4.35 | **16.51** (x3.80) | 48.7 ms | **233 µs** | 463 | **6.05** |
+| CSCO | 28.93 | 27.82 (x0.96) | 48 µs | 81 µs | 231 | **1.60** |
+| INTC | 32.57 | 31.01 (x0.95) | 27 µs | 183 µs | 230 | **1.79** |
+| MSFT | 28.70 | 27.92 (x0.97) | 33 µs | 179 µs | 232 | **3.37** |
+| AAPL | 14.27 | **25.78** (x1.81) | 44.9 ms | **79 µs** | 461 | **3.36** |
 
-Synthetic flow, for the claim that the fast path is unchanged (median M actions/s, 1k / 10k / 100k / 1M;
-`python analysis\run_bench.py && python analysis\plot_results.py`):
+The two symbols that stalled gain x1.8 and x3.8 in throughput, lose a 45 ms action, and give back
+455–460 MB of memory. Every symbol's memory now comes from the price levels actually in use instead of
+from the price *range*, which is the whole point: 230 MB of array per side was paying for 20 million
+levels to hold at most 5,603 of them.
+
+It is not free. On the three symbols that never stalled, D is 3–5% slower than in the pre-fix session,
+and the same 3–5% down relative to A measured in the same session (x2.40 / x2.71 / x2.72 of A, against
+x2.54 / x2.83 / x2.79 before), so it is not just machine state. Its worst action on those three also
+rises from 27–48 µs to 81–183 µs. That is the cost of the extra bounds check on every level lookup plus
+rebuilding the window occasionally instead of never moving it — a few percent of throughput and a
+~150 µs tail, in exchange for removing a 45 ms stall and 460 MB.
+
+Synthetic flow, where nothing should change because both flows fit inside one window (median M
+actions/s at 1k / 10k / 100k / 1M, engine D):
 
 | Flow | before | after |
 |---|---|---|
-| standard | 25.48 / 22.90 / 17.37 / 6.51 | _TBD_ |
-| hard | 24.60 / 20.02 / 15.14 / 6.17 | _TBD_ |
+| standard | 25.48 / 24.02 / 18.06 / 6.84 | 25.86 / 24.49 / 17.83 / 7.14 |
+| hard | 24.93 / 20.44 / 15.59 / 6.84 | 24.58 / 19.89 / 15.02 / 6.89 |
 
-A single unmeasured spot check while writing the fix (one run each, not the 5-run median, so only an
-indication): AAPL 24.4M actions/s, worst action 44 µs, 3.4 MB; AMZN 16.0M actions/s, 6.0 MB — against
-C's 8.5M and B's 12.5M on the same AMZN flow in the same session.
+Every one of those is within 4% either way, which is the same size as the drift between sessions for
+the other three engines, so the fast path is unchanged. D's synthetic memory is unchanged too
+(0.25–107 MB, see the Phase 4 memory table).
 
 ### Why B always needs about 1.9 GB
 
-B is uniformly 1,937–1,942 MB on every symbol, where D ranges from 230 to 463 MB. Two differences:
+In the pre-fix session B was uniformly 1,937–1,942 MB on every symbol, where D ranged from 230 to
+463 MB — both of them paying for the price *range*. D no longer does (1.25–6.05 MB above), so what
+follows explains why B's bill was eight times D's, with D as it was then. Two differences:
 
 1. **B sizes both sides together.** `FlatBook::cover` keeps a single `basePrice_` and resizes
    `bidLevels_` *and* `askLevels_` to the same span, so the $0.01 bid and the $199,999.99 ask between
@@ -639,22 +673,24 @@ B is uniformly 1,937–1,942 MB on every symbol, where D ranges from 230 to 463 
 
 Two arrays of 20 million 48-byte levels is **1,831 MiB**, which is most of the measured 1,940 MiB; the
 remaining ~110 MiB is the spare capacity those vectors keep after growing, the order buffers of the
-levels actually in use, and the order-id index. B also escapes D's stall, for an unglamorous reason:
-because both of its arrays stretch together during the untimed prefill, there is nothing left to grow
-during the measured flow. Its worst actions (90–572 µs) are the batched clean-up of dead slots inside a
-price level, not array growth.
+levels actually in use, and the order-id index. B escaped D's old stall for an unglamorous reason: because
+both of its arrays stretch together during the untimed prefill, there was nothing left to grow during
+the measured flow. Its worst actions (133–568 µs, the largest of any engine on three of the five
+symbols) are the batched clean-up of dead slots inside a price level, not array growth.
 
 Memory on real data, after the full day:
 
 | Engine | AMZN | CSCO | INTC | MSFT | AAPL |
 |---|---|---|---|---|---|
-| A | 5.12 MB | 1.94 MB | 1.28 MB | 3.22 MB | 3.88 MB |
+| A | 5.12 MB | 1.93 MB | 1.28 MB | 3.24 MB | 3.87 MB |
 | B | 1,942 MB | 1,940 MB | 1,940 MB | 1,940 MB | 1,941 MB |
 | C | 4.12 MB | 1.23 MB | 1.09 MB | 2.34 MB | 2.82 MB |
-| D | 463 MB | 231 MB | 230 MB | 232 MB | 461 MB |
+| D | 6.05 MB | 1.60 MB | 1.79 MB | 3.37 MB | 3.36 MB |
+| D before the fix | 463 MB | 231 MB | 230 MB | 232 MB | 461 MB |
 
-A and C pay only for the price levels actually in use (1,716–5,603 of them). B and D pay for the range,
-whether or not anything is resting in it.
+A, C and D now pay only for the price levels actually in use (1,716–5,603 of them). B is the one engine
+left paying for the whole range, whether or not anything is resting in it — the same mistake D used to
+make, times eight.
 ## Notes
 
 Built with AI coding assistance. The design decisions and analysis are my own.

@@ -287,7 +287,7 @@ private:
 // reach $199,999.99 one cent at a time needs ~20 million slots (229 MiB), and worse, the
 // first later order priced *below* the array's base has to insert at the front, which
 // shifts all 20 million slots - a single 45 ms stall, measured on real AAPL and AMZN data
-// (see the README section "Engine D and far-away prices").
+// (see the README section "Fixing D: a price window plus a side map").
 //
 // So the array covers at most kMaxWindow consecutive prices. Any price outside it goes into
 // `far_`, a small std::map of price -> level, sorted the same way. Everything below treats
