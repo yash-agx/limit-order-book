@@ -25,7 +25,7 @@ All four derive from `OrderBookBase`, pass the same tests, and produce identical
 | **A** – baseline | `std::map` | `std::list` | `std::unordered_map` |
 | **B** – flat arrays | `std::vector` indexed by price | `std::vector`, cancelled slots removed in batches | `std::deque` indexed by the id (hash-map fallback for large ids) |
 | **C** – custom | `std::map` (pool-allocated) | intrusive doubly-linked list in a pre-allocated node pool, 32-byte nodes | open-addressing hash map |
-| **D** – C with flat levels | array indexed by price, as in B | as C | as C |
+| **D** – C with flat levels | array indexed by price, as in B, over a window of prices with far-away levels in a small `std::map` | as C | as C |
 
 Four intermediate versions (C1–C4) add C's changes to A one at a time, for the ablation below.
 
@@ -91,7 +91,7 @@ data/                   the ITCH download and the actions extracted from it (git
 
 ## Tests
 
-`tests` runs the same 40 assert-based tests against each of the 7 engine variants. A differential test
+`tests` runs the same 43 assert-based tests against each of the 7 engine variants. A differential test
 then replays six seeded order flows through every engine and checks that each produces the same trades
 and the same final book as engine A. Finally, if the real-market action files are present (see
 [Real exchange data (ITCH)](#real-exchange-data-itch)), the same check runs on a real Nasdaq trading
@@ -375,6 +375,9 @@ The zeros in the last three columns are the honesty point, measured: real ITCH a
 
 ### Results
 
+*These are engine D before the far-away-price fix (see "Fixing D: a price window plus a side
+map"). A, B and C are unaffected by it.*
+
 100 runs: 5 symbols x 4 engines x 5 runs, each a fresh process, interleaved. Median of the 5 runs,
 with the slowest–fastest run in brackets. Every run finished with all four engines on an identical
 book, and the book was never crossed.
@@ -505,6 +508,9 @@ already stretched before the measured window begins.
 
 ### Why D is fastest on three symbols and collapses on two
 
+This section describes D as it was first written. The problem it diagnoses is fixed in
+"Fixing D: a price window plus a side map" below; everything here is the *before* picture.
+
 D keeps a **separate array per side**, each based at `first price seen on that side − 1024 cents`, and
 each has to span every price that side ever touches. A single ask at $199,999.99 therefore stretches
 the ask array to about 20 million levels the moment it arrives. `ListLevel` is 12 bytes, so that is
@@ -550,6 +556,73 @@ price-indexed array makes the cost of an action depend on the range of prices th
 not just on the work that action does. C, which keeps its levels in a `std::map`, pays about 70 ns
 instead of 35 ns per action and is never surprised: its worst action on real data is 27–237 µs, up to
 three orders of magnitude better than D's.
+
+### Fixing D: a price window plus a side map
+
+The diagnosis above blames one thing: D's flat array has to span **every price its side ever touched**.
+One $199,999.99 ask makes it 20 million levels long (229 MiB), and then the first ordinary ask below
+its base has to be inserted at the front, shifting all 20 million levels — a 45 ms stall.
+
+The fix bounds the array instead of stretching it, and leaves the fast path exactly as it was
+(`FlatLevels` in `IntrusiveBook.hpp`):
+
+- **A window, not the whole range.** The array covers at most `kMaxWindow` = 65,536 consecutive prices
+  ($655.36 worth). It starts at 2,048 and doubles as needed. Reaching a level inside the window is what
+  it always was — `levels_[price - base_]`, one subtraction, plus one bounds check.
+- **A side map for everything else.** A price outside the window goes into `far_`, a
+  `std::map<Price, ListLevel>` sorted best price first. A stub quote therefore costs one map insert
+  instead of 20 million element moves. The invariant that makes this cheap: no price in `far_` is ever
+  inside the window, so the price alone decides which structure a level lives in.
+- **The two behave as one sorted sequence of levels.** `bestPrice()` takes the better of the window's
+  best and `far_.begin()`, and `forEach` (which feeds `depth()` and the matching loop) merges the two.
+  So if the market ever does reach a far level, it matches there correctly and in time order, like any
+  other level — the side map is not a quarantine, it is just a different container.
+- **Growing and recentring never shift the array.** Both allocate a new array and copy the occupied
+  levels into it, which is bounded by 65,536 levels (786 KB per side), not by the price range. There is
+  no `insert(levels_.begin(), …)` anywhere any more — the operation that caused the stall is gone.
+- **Recentring, for a market that really has moved.** If 64 far levels pile up, the window is probably
+  in the wrong place, so it is rebuilt at full width around the current best price and every far level
+  that now fits is pulled in. If that didn't help — the far levels really are junk hundreds of dollars
+  away — the threshold doubles, so a useless recentre can never happen once per order.
+
+What it costs: one extra bounds check per level lookup, a `far_.empty()` check in `bestPrice()`, and
+levels inside a 65,536-price window only. Everything the synthetic flows do stays on the fast path
+(the hard flow spans 10,000 price levels, well inside one window), so their numbers should not move.
+
+B is deliberately left alone: its 1.9 GB (next section) is the same family of problem, and keeping it
+unfixed keeps the contrast in the write-up.
+
+**Tests.** Three new cases, run against all seven engines (41–43 in `tests.cpp`): far-away orders on
+both sides at once, with depth, cancels and an ordinary order below where the book opened; the market
+walking into a far level and matching there, oldest order first, then emptying and reusing that price;
+and a cluster of 80 far levels per side — more than the recentre threshold — with the near market then
+collapsing into the cluster and new prices appearing around it. The ITCH correctness test is unchanged
+and still passes: all 7 engines finish on an identical book and the book is never crossed.
+
+#### Before and after
+
+Fill in from a fresh 100-run session (`python analysis\run_itch.py && python analysis\plot_itch.py`).
+"Before" is the 100-run session in the table above.
+
+| Symbol | M actions/s before | after | D's worst action before | after | book MB after the day, before | after |
+|---|---|---|---|---|---|---|
+| AMZN | 4.35 | _TBD_ | 48.7 ms | _TBD_ | 463 | _TBD_ |
+| CSCO | 28.93 | _TBD_ | 48 µs | _TBD_ | 231 | _TBD_ |
+| INTC | 32.57 | _TBD_ | 27 µs | _TBD_ | 230 | _TBD_ |
+| MSFT | 28.70 | _TBD_ | 33 µs | _TBD_ | 232 | _TBD_ |
+| AAPL | 14.27 | _TBD_ | 44.9 ms | _TBD_ | 461 | _TBD_ |
+
+Synthetic flow, for the claim that the fast path is unchanged (median M actions/s, 1k / 10k / 100k / 1M;
+`python analysis\run_bench.py && python analysis\plot_results.py`):
+
+| Flow | before | after |
+|---|---|---|
+| standard | 25.48 / 22.90 / 17.37 / 6.51 | _TBD_ |
+| hard | 24.60 / 20.02 / 15.14 / 6.17 | _TBD_ |
+
+A single unmeasured spot check while writing the fix (one run each, not the 5-run median, so only an
+indication): AAPL 24.4M actions/s, worst action 44 µs, 3.4 MB; AMZN 16.0M actions/s, 6.0 MB — against
+C's 8.5M and B's 12.5M on the same AMZN flow in the same session.
 
 ### Why B always needs about 1.9 GB
 
