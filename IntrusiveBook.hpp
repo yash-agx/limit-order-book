@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <memory_resource>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -13,7 +14,8 @@
 //   C2 = pool + intrusive list
 //   C3 = C2 + open-addressing hash map for the id index
 //   C4 = C3 + cache-friendly node layout   (this is the complete engine C)
-//   D  = C4 with engine B's flat price-level array in place of the std::map
+//   D  = C4 with engine B's flat price-level array in place of the std::map (over a window
+//        of prices, with far-away levels kept in a small side map - see FlatLevels)
 //
 // Shared by every step:
 //   - All orders live in ONE pre-allocated array, the pool. An order is referred to by its
@@ -274,70 +276,226 @@ private:
 
 // ---------------------------------------------------------------------------------------
 // Price levels for one side of the book, version 2: engine B's idea - a flat array indexed
-// by price. levels_[price - base_] is the level for that price, so reaching a level is one
+// by price - but only over a *window* of prices around where trading actually happens.
+// levels_[price - base_] is the level for that price, so reaching a level is one
 // subtraction instead of a walk down a tree. The best price is remembered, and when the
 // best level empties we step along the array to the next level that has orders.
+//
+// Why a window, instead of an array stretched to cover every price ever seen (which is what
+// this class did at first)? Real exchange data contains a handful of orders priced absurdly
+// far from the market: pre-open stub quotes at $0.01 and $199,999.99. An array that has to
+// reach $199,999.99 one cent at a time needs ~20 million slots (229 MiB), and worse, the
+// first later order priced *below* the array's base has to insert at the front, which
+// shifts all 20 million slots - a single 45 ms stall, measured on real AAPL and AMZN data
+// (see the README section "Engine D and far-away prices").
+//
+// So the array covers at most kMaxWindow consecutive prices. Any price outside it goes into
+// `far_`, a small std::map of price -> level, sorted the same way. Everything below treats
+// the two together as one sorted sequence of levels: the best price is the better of the two
+// bests, and forEach walks them in step. Three consequences:
+//   - a far-away order costs a std::map insert instead of 20 million element moves;
+//   - if the market ever reaches a far level it matches correctly straight out of the map;
+//   - if far levels pile up (the market has moved somewhere else entirely) the window is
+//     rebuilt around the market and everything that now fits is pulled in.
+// Growing and rebuilding both allocate a new array and copy the occupied levels into it, so
+// nothing is ever inserted at the front and the cost is bounded by kMaxWindow.
+//
+// Invariant: no price in `far_` lies inside the current window. That is what lets find()
+// and get() decide where a level lives from the price alone.
+//
+// Note on references: get() may rebuild the array, which invalidates references to levels
+// handed out earlier. The engine only ever holds one level reference at a time and finishes
+// with it before calling get() again, so this is safe.
 // ---------------------------------------------------------------------------------------
 template <bool IsBidSide>
 class FlatLevels {
 public:
-    bool       empty() const     { return occupied_ == 0; }
-    Price      bestPrice() const { return best_; }
-    ListLevel& best()            { return at(best_); }
+    bool empty() const { return occupiedNear_ == 0 && far_.empty(); }
+
+    Price bestPrice() const {
+        if (far_.empty())       return bestNear_;             // the usual case: no far levels at all
+        if (occupiedNear_ == 0) return far_.begin()->first;
+        return isBetter(bestNear_, far_.begin()->first) ? bestNear_ : far_.begin()->first;
+    }
+
+    ListLevel& best() {
+        Price price = bestPrice();
+        return inWindow(price) ? at(price) : far_.begin()->second;
+    }
 
     // The level a new order is about to join (so an empty level counts as occupied from now).
     ListLevel& get(Price price) {
-        cover(price);
-        ListLevel& level = at(price);
-        if (level.count == 0) {
-            if (occupied_ == 0 || isBetter(price, best_)) best_ = price;
-            ++occupied_;
-        }
-        return level;
+        if (inWindow(price)) return getNear(price);            // the common case: one bounds check
+        return getOutside(price);
     }
-    ListLevel& find(Price price) { return at(price); }
+
+    ListLevel& find(Price price) {                             // the level must exist
+        return inWindow(price) ? at(price) : far_.find(price)->second;
+    }
 
     void levelEmptied(Price price) {
-        --occupied_;
-        if (occupied_ > 0 && price == best_)
-            while (at(best_).count == 0) best_ += kAway;   // some level still has orders, so this stops
+        if (!inWindow(price)) { far_.erase(price); return; }
+        --occupiedNear_;
+        if (occupiedNear_ > 0 && price == bestNear_)
+            while (at(bestNear_).count == 0) bestNear_ += kAway;   // some level still has orders, so this stops
     }
 
+    // Call visit(price, level) for each level, best price first, until it returns false.
+    // The window and the side map are two sorted sequences, so this walks them together and
+    // always takes the better of the two next prices (a merge).
     template <typename Visit>
     void forEach(Visit visit) const {
-        std::size_t left = occupied_;
-        for (Price price = best_; left > 0; price += kAway) {
-            const ListLevel& level = levels_[static_cast<std::size_t>(price - base_)];
+        auto        it   = far_.begin();
+        std::size_t left = occupiedNear_;
+        for (Price price = bestNear_; left > 0; price += kAway) {
+            const ListLevel& level = at(price);
             if (level.count == 0) continue;
             --left;
+            for (; it != far_.end() && isBetter(it->first, price); ++it)   // far levels that come first
+                if (!visit(it->first, it->second)) return;
             if (!visit(price, level)) return;
         }
+        for (; it != far_.end(); ++it)                                     // whatever is left in the map
+            if (!visit(it->first, it->second)) return;
     }
 
 private:
-    static constexpr Price kAway    = IsBidSide ? -1 : 1;   // the direction that leads away from the other side
-    static constexpr Price kPadding = 1024;                 // spare levels kept beyond the prices in use
+    static constexpr Price kAway = IsBidSide ? -1 : 1;   // the direction that leads away from the other side
+
+    static constexpr std::size_t kMinWindow = 2048;      // the window starts this wide ...
+    static constexpr std::size_t kMaxWindow = 65536;     // ... and never grows past this ($655 of prices)
+    static constexpr std::size_t kFarLimit  = 64;        // this many far levels triggers a recentre
+
+    // The map is sorted best price first, exactly like MapLevels above.
+    using FarCompare = std::conditional_t<IsBidSide, std::greater<Price>, std::less<Price>>;
 
     static bool isBetter(Price a, Price b) { return IsBidSide ? a > b : a < b; }
 
-    std::vector<ListLevel> levels_;      // covers prices base_ .. base_ + size - 1
-    Price                  base_ = 0;
-    Price                  best_ = 0;    // only meaningful while occupied_ > 0
-    std::size_t            occupied_ = 0;   // how many levels have at least one order
+    std::vector<ListLevel>                 levels_;          // the window: base_ .. base_ + size - 1
+    Price                                  base_ = 0;
+    Price                                  bestNear_ = 0;    // only meaningful while occupiedNear_ > 0
+    std::size_t                            occupiedNear_ = 0;  // window levels with at least one order
+    std::map<Price, ListLevel, FarCompare> far_;             // levels too far away for the window
+    std::size_t                            farLimit_ = kFarLimit;
 
-    ListLevel& at(Price price) { return levels_[static_cast<std::size_t>(price - base_)]; }
+    bool inWindow(Price price) const {
+        return !levels_.empty() && price >= base_ &&
+               price - base_ < static_cast<Price>(levels_.size());
+    }
+    ListLevel&       at(Price price)       { return levels_[static_cast<std::size_t>(price - base_)]; }
+    const ListLevel& at(Price price) const { return levels_[static_cast<std::size_t>(price - base_)]; }
 
-    void cover(Price price) {            // grow the array until it includes this price
-        if (levels_.empty()) {
-            base_ = price - kPadding;
-            levels_.resize(static_cast<std::size_t>(2 * kPadding));
-        } else if (price < base_) {      // extend downwards (rare: every level moves up)
-            std::size_t extra = static_cast<std::size_t>(base_ - price + kPadding);
-            levels_.insert(levels_.begin(), extra, ListLevel{});
-            base_ -= static_cast<Price>(extra);
-        } else if (price - base_ >= static_cast<Price>(levels_.size())) {
-            levels_.resize(static_cast<std::size_t>(price - base_ + kPadding));
+    ListLevel& getNear(Price price) {
+        ListLevel& level = at(price);
+        if (level.count == 0) {
+            if (occupiedNear_ == 0 || isBetter(price, bestNear_)) bestNear_ = price;
+            ++occupiedNear_;
         }
+        return level;
+    }
+
+    // A price outside the window: either the window can be moved or widened to include it,
+    // or the level belongs in the side map.
+    ListLevel& getOutside(Price price) {
+        auto found = far_.find(price);
+        if (found != far_.end()) return found->second;         // a far level that already exists
+
+        if (fitWindow(price)) return getNear(price);           // grown or re-placed to cover it
+
+        if (far_.size() + 1 > farLimit_) {                     // the market may have moved out here
+            recentre(price);
+            if (inWindow(price)) return getNear(price);
+        }
+        return far_[price];     // a brand-new far level, count 0; its order is linked straight after
+    }
+
+    // Try to make `price` addressable in the window. Returns false if it is too far away,
+    // i.e. no window of kMaxWindow prices could hold both it and the levels already resting.
+    bool fitWindow(Price price) {
+        std::size_t size = levels_.empty() ? kMinWindow : levels_.size();
+
+        if (occupiedNear_ == 0) {                              // nothing to preserve: put the window here
+            rebuild(price - static_cast<Price>(size / 2), size);
+            return true;
+        }
+        // Cheap reject before scanning the window: every resting level sits inside it, so a
+        // price a whole kMaxWindow beyond either edge can never share a window with them.
+        Price highEdge = base_ + static_cast<Price>(levels_.size()) - 1;
+        if (price < base_    && base_ - price    >= static_cast<Price>(kMaxWindow)) return false;
+        if (price > highEdge && price - highEdge >= static_cast<Price>(kMaxWindow)) return false;
+
+        std::pair<Price, Price> occupied = occupiedRange();
+        Price       low  = std::min(price, occupied.first);
+        Price       high = std::max(price, occupied.second);
+        std::size_t need = static_cast<std::size_t>(high - low) + 1;
+        if (need > kMaxWindow) return false;
+
+        while (size < need) size *= 2;                         // doubles at most 5 times, kMinWindow -> kMaxWindow
+        rebuild(low - static_cast<Price>((size - need) / 2), size);   // centre the span in the new array
+        return true;
+    }
+
+    // Enough far levels have piled up that the window is probably in the wrong place.
+    // Rebuild it at full width around the best price: the market is wherever the best price
+    // is, and far-away junk is by definition on the *worse* side of it.
+    void recentre(Price price) {
+        Price anchor = empty() ? price : bestPrice();
+        rebuild(anchor - static_cast<Price>(kMaxWindow / 2), kMaxWindow);
+        // If the junk is still out there, don't try again on the very next far order: a
+        // recentre that didn't help must not happen once per order.
+        farLimit_ = std::max(kFarLimit, far_.size() * 2);
+    }
+
+    // The lowest and highest prices in the window that have orders.
+    std::pair<Price, Price> occupiedRange() const {
+        Price       low = 0, high = 0;
+        std::size_t seen = 0;
+        for (std::size_t i = 0; i < levels_.size() && seen < occupiedNear_; ++i) {
+            if (levels_[i].count == 0) continue;
+            Price price = base_ + static_cast<Price>(i);
+            if (seen++ == 0) low = price;
+            high = price;
+        }
+        return {low, high};
+    }
+
+    // Move the window to [newBase, newBase + size). Occupied levels that fit are copied into
+    // the new array; any that don't (only possible on a recentre) go to the side map, and far
+    // levels that now fit come in. One allocation and one pass - never a front-insert.
+    void rebuild(Price newBase, std::size_t size) {
+        std::vector<ListLevel>                   fresh(size);
+        std::vector<std::pair<Price, ListLevel>> evicted;
+        std::size_t occupied = 0;
+        Price       best     = 0;
+
+        auto place = [&](Price price, const ListLevel& level) {
+            if (price < newBase || price - newBase >= static_cast<Price>(size)) {
+                evicted.push_back({price, level});
+                return;
+            }
+            fresh[static_cast<std::size_t>(price - newBase)] = level;
+            if (occupied == 0 || isBetter(price, best)) best = price;
+            ++occupied;
+        };
+
+        std::size_t seen = 0;
+        for (std::size_t i = 0; i < levels_.size() && seen < occupiedNear_; ++i)
+            if (levels_[i].count != 0) { ++seen; place(base_ + static_cast<Price>(i), levels_[i]); }
+
+        for (auto it = far_.begin(); it != far_.end(); ) {
+            if (it->first >= newBase && it->first - newBase < static_cast<Price>(size)) {
+                place(it->first, it->second);
+                it = far_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        levels_.swap(fresh);
+        base_         = newBase;
+        occupiedNear_ = occupied;
+        bestNear_     = best;
+        for (const std::pair<Price, ListLevel>& level : evicted) far_[level.first] = level.second;
     }
 };
 

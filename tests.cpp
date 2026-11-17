@@ -525,6 +525,101 @@ void engineTests() {
             for (const DepthLevel& lvl : b.depth(side, static_cast<std::size_t>(-1))) resting += lvl.orderCount;
         assert(resting == gen.bookSize());
     }
+
+    // ---- Phase 5: prices far outside the range the book is trading in ----
+    // Real data has a few orders priced absurdly far from the market (stub quotes at $0.01
+    // and $199,999.99). Engine D keeps a flat array only over a window of prices and puts
+    // anything outside it in a side map, so these three tests check that far-away levels
+    // behave exactly like near ones. The far price here is $9,999.99 rather than the real
+    // $199,999.99 only to keep engine B's price-indexed arrays a sane size in the tests.
+
+    const Price kFar = 999999;   // $9,999.99: hundreds of thousands of price levels away
+
+    // 41. Far-away orders on both sides rest, show up in depth in the right place,
+    //     and can be cancelled - and an ordinary order below where the book opened,
+    //     which is what used to be slow in engine D, is just an ordinary order
+    {
+        Book b;
+        b.addOrder({1, Side::Buy,  OrderType::Limit, 10000, 5});
+        b.addOrder({2, Side::Sell, OrderType::Limit, 10100, 5});
+        b.addOrder({3, Side::Buy,  OrderType::Limit, 1, 7});       // a penny bid
+        b.addOrder({4, Side::Sell, OrderType::Limit, kFar, 9});     // a stub ask
+        assert(b.bestBid() == 10000 && b.bestAsk() == 10100);       // the market is unchanged
+
+        auto bids = b.depth(Side::Buy, 10), asks = b.depth(Side::Sell, 10);
+        assert(bids.size() == 2 && bids[0].price == 10000 && bids[1].price == 1);
+        assert(asks.size() == 2 && asks[0].price == 10100 && asks[1].price == kFar);
+        assert(b.quantityAt(Side::Buy, 1) == 7 && b.quantityAt(Side::Sell, kFar) == 9);
+        assert(b.getOrder(3)->price == 1 && b.getOrder(4)->price == kFar);
+
+        b.addOrder({5, Side::Buy, OrderType::Limit, 8900, 5});   // below where the book opened
+        bids = b.depth(Side::Buy, 10);
+        assert(b.bestBid() == 10000 && bids.size() == 3);
+        assert(bids[1].price == 8900 && bids[2].price == 1);
+
+        assert(b.cancelOrder(3) && b.cancelOrder(4));
+        assert(b.depth(Side::Buy, 10).size() == 2 && b.depth(Side::Sell, 10).size() == 1);
+        assert(b.bestBid() == 10000 && b.bestAsk() == 10100);
+    }
+    // 42. The market moves into a far-away level: it matches there, in the right order,
+    //     the side empties cleanly, and the price can be used again afterwards
+    {
+        Book b;
+        b.addOrder({1, Side::Sell, OrderType::Limit, 10100, 5});
+        b.addOrder({2, Side::Sell, OrderType::Limit, kFar, 4});     // two orders at the far price,
+        b.addOrder({3, Side::Sell, OrderType::Limit, kFar, 6});     // so time priority is visible
+
+        auto t = b.addOrder({4, Side::Buy, OrderType::Market, 0, 12});
+        assert(t.size() == 3);
+        assert(t[0].price == 10100 && t[1].price == kFar && t[2].price == kFar);
+        assert(t[1].sellId == 2 && t[2].sellId == 3 && t[2].quantity == 3);
+        assert(b.bestAsk() == kFar && b.getOrder(3)->quantity == 3);
+
+        auto t2 = b.addOrder({5, Side::Buy, OrderType::Limit, kFar, 3});
+        assert(t2.size() == 1 && t2[0].sellId == 3);
+        assert(!b.bestAsk() && b.depth(Side::Sell, 10).empty());
+
+        b.addOrder({6, Side::Sell, OrderType::Limit, kFar, 1});
+        assert(b.bestAsk() == kFar && b.quantityAt(Side::Sell, kFar) == 1);
+    }
+    // 43. A whole cluster of far-away levels on both sides (more than engine D keeps in its
+    //     side map before it tries to re-place its window), the market then collapsing into
+    //     that cluster, and new prices around it
+    {
+        Book b;
+        const Price mid = 500000;                                   // the market is at $5,000
+        for (Price p = 0; p < 5; ++p) {
+            b.addOrder({static_cast<OrderId>(1 + p),  Side::Buy,  OrderType::Limit, mid - p, 1});
+            b.addOrder({static_cast<OrderId>(11 + p), Side::Sell, OrderType::Limit, mid + 100 + p, 1});
+        }
+        for (Price p = 1; p <= 80; ++p) {                           // 80 far levels on each side
+            b.addOrder({static_cast<OrderId>(100 + p), Side::Buy,  OrderType::Limit, p, 2});
+            b.addOrder({static_cast<OrderId>(200 + p), Side::Sell, OrderType::Limit, kFar - 80 + p, 2});
+        }
+        assert(b.bestBid() == mid && b.bestAsk() == mid + 100);
+
+        auto bids = b.depth(Side::Buy, 1000), asks = b.depth(Side::Sell, 1000);
+        assert(bids.size() == 85 && asks.size() == 85);
+        assert(bids[0].price == mid && bids[4].price == mid - 4);
+        assert(bids[5].price == 80 && bids.back().price == 1);      // the far cluster, worst last
+        assert(asks[0].price == mid + 100 && asks[4].price == mid + 104);
+        assert(asks[5].price == kFar - 79 && asks.back().price == kFar);
+
+        for (OrderId id = 1; id <= 5; ++id) assert(b.cancelOrder(id));   // the near bids go away
+        assert(b.bestBid() == 80);                                  // the far cluster is now the market
+
+        auto t = b.addOrder({300, Side::Sell, OrderType::Limit, 78, 6});
+        assert(t.size() == 3 && t[0].price == 80 && t[0].buyId == 180 && t[2].price == 78);
+        assert(b.bestBid() == 77);
+
+        b.addOrder({301, Side::Buy, OrderType::Limit, 85, 1});      // a new price next to the cluster
+        assert(b.bestBid() == 85);
+        bids = b.depth(Side::Buy, 1000);
+        assert(bids.size() == 78 && bids[0].price == 85 && bids[1].price == 77 && bids.back().price == 1);
+        std::size_t orders = 0;
+        for (const DepthLevel& level : bids) orders += level.orderCount;
+        assert(orders == 78);
+    }
 }
 
 // ---- Phase 4: differential test ----
@@ -674,19 +769,19 @@ void itchTests() {
 
 int main() {
     engineTests<OrderBook>();
-    std::printf("A : all 40 tests passed.\n");
+    std::printf("A : all 43 tests passed.\n");
     engineTests<FlatBook>();
-    std::printf("B : all 40 tests passed.\n");
+    std::printf("B : all 43 tests passed.\n");
     engineTests<PoolBook>();
-    std::printf("C1: all 40 tests passed.\n");
+    std::printf("C1: all 43 tests passed.\n");
     engineTests<IntrusiveBookC2>();
-    std::printf("C2: all 40 tests passed.\n");
+    std::printf("C2: all 43 tests passed.\n");
     engineTests<IntrusiveBookC3>();
-    std::printf("C3: all 40 tests passed.\n");
+    std::printf("C3: all 43 tests passed.\n");
     engineTests<CustomBook>();
-    std::printf("C4: all 40 tests passed.\n");
+    std::printf("C4: all 43 tests passed.\n");
     engineTests<HybridBook>();
-    std::printf("D : all 40 tests passed.\n");
+    std::printf("D : all 43 tests passed.\n");
 
     differentialTest(standardFlow(200), 42, 30000);
     differentialTest(standardFlow(2000), 7, 30000);
